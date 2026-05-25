@@ -1,14 +1,13 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { 
-  Send, Users, Mail, Settings, Play, RefreshCcw, Terminal, 
-  KeyRound, Clock, FileText, Sparkles, Loader2, BarChart3, 
-  Inbox, ListTree, CheckCircle2, AlertCircle, Eye
+  Send, Users, Mail, Settings, RefreshCcw, Terminal, 
+  FileText, Sparkles, Loader2, BarChart3, 
+  Inbox, ListTree
 } from 'lucide-react';
 
 // --- TYPES ---
 interface Account { user: string; pass: string; }
-interface Recipient { email: string; name: string; business: string; [key: string]: string; }
 interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestamp: string; }
 interface EmailReply { subject: string; from: string; date: string; uid: number; }
 
