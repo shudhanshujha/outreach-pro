@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Send, Users, Mail, Settings, Play, RefreshCcw, Terminal, KeyRound, Clock, FileText } from 'lucide-react';
+import { Send, Users, Mail, Settings, Play, RefreshCcw, Terminal, KeyRound, Clock, FileText, Sparkles, Loader2 } from 'lucide-react';
 
 interface Account {
   user: string;
@@ -37,6 +37,7 @@ const App: React.FC = () => {
   const [delayMax, setDelayMax] = useState(90);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed'>('idle');
+  const [isEnriching, setIsEnriching] = useState(false);
   
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -60,14 +61,39 @@ const App: React.FC = () => {
     logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [logs]);
 
+  const handleEnrich = async () => {
+    const emails = recipientText.split('\n').map(line => line.split(',')[0].trim()).filter(e => e);
+    if (emails.length === 0) return alert('Enter at least one email to enrich.');
+
+    setIsEnriching(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/enrich`, { emails });
+      const enriched = res.data.enrichedData;
+      
+      const newText = enriched.map((item: any) => 
+        `${item.email}, ${item.name}, ${item.business}`
+      ).join('\n');
+      
+      setRecipientText(newText);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Enrichment failed. Make sure HUNTER_API_KEY is set on the backend.');
+    } finally {
+      setIsEnriching(false);
+    }
+  };
+
   const handleStart = async () => {
     const validAccounts = accounts.filter(a => a.user && a.pass);
     if (validAccounts.length === 0) return alert('Please add at least one Gmail account');
 
     const lines = recipientText.split('\n').filter(l => l.trim());
     const recipients: Recipient[] = lines.map(line => {
-      const [email, name, business] = line.split(',').map(s => s.trim());
-      return { email, name, business };
+      const parts = line.split(',').map(s => s.trim());
+      return { 
+        email: parts[0] || '', 
+        name: parts[1] || 'Unknown', 
+        business: parts[2] || 'N/A' 
+      };
     });
 
     try {
@@ -180,7 +206,14 @@ const App: React.FC = () => {
                   <div className="p-2 bg-slate-800 rounded-lg"><Users className="w-5 h-5 text-blue-400" /></div>
                   <h2 className="text-lg font-semibold text-white">Target Recipients</h2>
                 </div>
-                <span className="text-xs font-medium text-slate-500 bg-slate-800 px-2.5 py-1 rounded-md">CSV Format</span>
+                <button 
+                  onClick={handleEnrich}
+                  disabled={isEnriching}
+                  className="text-xs flex items-center gap-1.5 font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-all border border-indigo-500/20 disabled:opacity-50"
+                >
+                  {isEnriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                  {isEnriching ? 'Enriching...' : 'Enrich Data'}
+                </button>
               </div>
               <p className="text-xs text-slate-400 mb-3 ml-1">Format: <span className="text-indigo-300 font-mono">email, name, business</span></p>
               <textarea
@@ -317,3 +350,4 @@ const App: React.FC = () => {
 };
 
 export default App;
+

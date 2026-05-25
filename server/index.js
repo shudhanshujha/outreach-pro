@@ -4,11 +4,44 @@ const cors = require('cors');
 const { parse } = require('csv-parse/sync');
 const app = express();
 
+const axios = require('axios');
+
 app.use(cors());
 app.use(express.json());
 
 app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running!');
+});
+
+// Enrichment Route
+app.post('/api/enrich', async (req, res) => {
+  const { emails } = req.body;
+  const apiKey = process.env.HUNTER_API_KEY;
+
+  if (!apiKey) {
+    return res.status(400).json({ error: 'Hunter.io API Key is missing on the server.' });
+  }
+
+  const enrichedData = [];
+  
+  for (const email of emails) {
+    try {
+      // Using Hunter.io Email Verifier API which also returns some info
+      const response = await axios.get(`https://api.hunter.io/v2/email-verifier?email=${email}&api_key=${apiKey}`);
+      const data = response.data.data;
+      
+      enrichedData.push({
+        email,
+        name: data.first_name ? `${data.first_name} ${data.last_name || ''}`.trim() : 'Unknown',
+        business: data.domain || 'N/A',
+        status: data.result
+      });
+    } catch (err) {
+      enrichedData.push({ email, name: 'Failed', business: 'N/A', status: 'error' });
+    }
+  }
+
+  res.json({ enrichedData });
 });
 
 let logs = [];
