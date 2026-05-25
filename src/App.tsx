@@ -1,34 +1,24 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
-import { Send, Users, Mail, Settings, Play, RefreshCcw, Terminal, KeyRound, Clock, FileText, Sparkles, Loader2 } from 'lucide-react';
+import { 
+  Send, Users, Mail, Settings, Play, RefreshCcw, Terminal, 
+  KeyRound, Clock, FileText, Sparkles, Loader2, BarChart3, 
+  Inbox, ListTree, CheckCircle2, AlertCircle, Eye
+} from 'lucide-react';
 
-interface Account {
-  user: string;
-  pass: string;
-}
-
-interface Recipient {
-  email: string;
-  name: string;
-  business: string;
-  [key: string]: string;
-}
-
-interface LogEntry {
-  text: string;
-  type?: 'success' | 'error' | 'info';
-  timestamp: string;
-}
+// --- TYPES ---
+interface Account { user: string; pass: string; }
+interface Recipient { email: string; name: string; business: string; [key: string]: string; }
+interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestamp: string; }
+interface EmailReply { subject: string; from: string; date: string; uid: number; }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const App: React.FC = () => {
+  // --- STATE ---
+  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
   const [accounts, setAccounts] = useState<Account[]>([
-    { user: '', pass: '' },
-    { user: '', pass: '' },
-    { user: '', pass: '' },
-    { user: '', pass: '' },
-    { user: '', pass: '' },
+    { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' },
   ]);
   const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
@@ -38,9 +28,12 @@ const App: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed'>('idle');
   const [isEnriching, setIsEnriching] = useState(false);
-  
+  const [replies, setReplies] = useState<EmailReply[]>([]);
+  const [loadingInbox, setLoadingInbox] = useState(false);
+
   const logEndRef = useRef<HTMLDivElement>(null);
 
+  // --- EFFECTS ---
   useEffect(() => {
     let interval: number;
     if (status === 'running') {
@@ -49,305 +42,250 @@ const App: React.FC = () => {
           const res = await axios.get(`${API_BASE_URL}/api/logs`);
           setLogs(res.data.logs);
           setStatus(res.data.status);
-        } catch (err) {
-          console.error('Polling error:', err);
-        }
+        } catch (err) { console.error(err); }
       }, 2000);
     }
     return () => clearInterval(interval);
   }, [status]);
 
-  useEffect(() => {
-    logEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [logs]);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
+  // --- ACTIONS ---
   const handleEnrich = async () => {
-    const emails = recipientText.split('\n').map(line => line.split(',')[0].trim()).filter(e => e);
-    if (emails.length === 0) return alert('Enter at least one email to enrich.');
-
+    const emails = recipientText.split('\n').map(l => l.split(',')[0].trim()).filter(e => e);
+    if (emails.length === 0) return alert('Enter emails first');
     setIsEnriching(true);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/enrich`, { emails });
-      const enriched = res.data.enrichedData;
-      
-      const newText = enriched.map((item: any) => 
-        `${item.email}, ${item.name}, ${item.business}`
-      ).join('\n');
-      
-      setRecipientText(newText);
-    } catch (err: any) {
-      alert(err.response?.data?.error || 'Enrichment failed. Make sure HUNTER_API_KEY is set on the backend.');
-    } finally {
-      setIsEnriching(false);
-    }
+      setRecipientText(res.data.enrichedData.map((i: any) => `${i.email}, ${i.name}, ${i.business}`).join('\n'));
+    } catch (err) { alert('Enrichment failed. Check Hunter API Key.'); }
+    finally { setIsEnriching(false); }
   };
 
   const handleStart = async () => {
-    const validAccounts = accounts.filter(a => a.user && a.pass);
-    if (validAccounts.length === 0) return alert('Please add at least one Gmail account');
-
-    const lines = recipientText.split('\n').filter(l => l.trim());
-    const recipients: Recipient[] = lines.map(line => {
-      const parts = line.split(',').map(s => s.trim());
-      return { 
-        email: parts[0] || '', 
-        name: parts[1] || 'Unknown', 
-        business: parts[2] || 'N/A' 
-      };
+    const validAccs = accounts.filter(a => a.user && a.pass);
+    if (validAccs.length === 0) return alert('Add at least one account');
+    const recipients = recipientText.split('\n').filter(l => l.trim()).map(line => {
+      const p = line.split(',').map(s => s.trim());
+      return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
     });
-
     try {
-      await axios.post(`${API_BASE_URL}/api/send`, {
-        accounts: validAccounts,
-        recipients,
-        subject,
-        body,
-        delayMin,
-        delayMax
-      });
+      await axios.post(`${API_BASE_URL}/api/send`, { accounts: validAccs, recipients, subject, body, delayMin, delayMax });
       setStatus('running');
-    } catch (err) {
-      alert('Failed to start outreach');
-    }
+      setActiveTab('campaign');
+    } catch (err) { alert('Failed to start'); }
   };
 
-  const handleReset = async () => {
-    await axios.post(`${API_BASE_URL}/api/reset`);
-    setLogs([]);
-    setStatus('idle');
+  const fetchInbox = async () => {
+    const acc = accounts[0]; // Fetch from primary account
+    if (!acc.user || !acc.pass) return alert('Enter account 1 details to fetch inbox');
+    setLoadingInbox(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: acc });
+      setReplies(res.data.messages);
+    } catch (err) { alert('Failed to fetch inbox'); }
+    finally { setLoadingInbox(false); }
   };
 
   return (
-    <div className="min-h-screen bg-[#0a0a0a] text-slate-200 font-sans selection:bg-indigo-500/30">
-      {/* Background ambient glow */}
-      <div className="fixed inset-0 z-0 overflow-hidden pointer-events-none">
-        <div className="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] rounded-full bg-indigo-900/20 blur-[120px]" />
-        <div className="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] rounded-full bg-blue-900/10 blur-[120px]" />
-      </div>
-
-      <div className="relative z-10 p-6 md:p-10 w-full max-w-7xl mx-auto">
-        <header className="flex items-center justify-between mb-10 pb-6 border-b border-slate-800/60">
-          <div className="flex items-center gap-4">
-            <div className="p-3 bg-gradient-to-br from-indigo-500 to-blue-600 rounded-xl shadow-lg shadow-indigo-500/20">
-              <Send className="w-7 h-7 text-white" />
-            </div>
-            <div>
-              <h1 className="text-3xl font-extrabold tracking-tight text-white">Outreach<span className="text-indigo-400">Pro</span></h1>
-              <p className="text-slate-400 text-sm mt-1 font-medium">Mass Email Automation Engine</p>
-            </div>
+    <div className="min-h-screen bg-[#070708] text-slate-300 font-sans">
+      {/* Sidebar Navigation */}
+      <aside className="fixed left-0 top-0 bottom-0 w-20 md:w-64 bg-[#0d0d0f] border-r border-slate-800/50 z-50 flex flex-col">
+        <div className="p-6 flex items-center gap-3 border-b border-slate-800/50">
+          <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/20">
+            <Send className="w-5 h-5 text-white" />
           </div>
-          
-          <div className="hidden md:flex items-center gap-3">
-             <div className="flex items-center gap-2 px-4 py-2 bg-slate-800/50 rounded-full border border-slate-700/50">
-                <span className="relative flex h-3 w-3">
-                  {status === 'running' && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>}
-                  <span className={`relative inline-flex rounded-full h-3 w-3 ${status === 'running' ? 'bg-indigo-500' : status === 'completed' ? 'bg-emerald-500' : 'bg-slate-500'}`}></span>
-                </span>
-                <span className="text-sm font-medium capitalize tracking-wide text-slate-300">
-                  {status}
-                </span>
-             </div>
-          </div>
-        </header>
+          <span className="hidden md:block font-bold text-lg text-white tracking-tight">Outreach<span className="text-indigo-500">Pro</span></span>
+        </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        <nav className="flex-1 p-4 space-y-2 mt-4">
+          <button onClick={() => setActiveTab('campaign')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'campaign' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <ListTree className="w-5 h-5" />
+            <span className="hidden md:block font-medium">Campaign</span>
+          </button>
+          <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'inbox' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <Inbox className="w-5 h-5" />
+            <span className="hidden md:block font-medium">Unified Inbox</span>
+          </button>
+          <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'analytics' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <BarChart3 className="w-5 h-5" />
+            <span className="hidden md:block font-medium">Analytics</span>
+          </button>
+        </nav>
+
+        <div className="p-4 border-t border-slate-800/50">
+           <div className="flex items-center gap-3 px-3 py-2 bg-slate-900/50 rounded-xl">
+              <div className={`w-2 h-2 rounded-full ${status === 'running' ? 'bg-indigo-500 animate-pulse' : 'bg-slate-600'}`} />
+              <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">{status}</span>
+           </div>
+        </div>
+      </aside>
+
+      {/* Main Content */}
+      <main className="ml-20 md:ml-64 p-6 md:p-10 relative">
+        <div className="max-w-6xl mx-auto">
           
-          {/* Left Column: Configuration (Takes up 7 cols) */}
-          <div className="lg:col-span-7 space-y-6">
-            
-            {/* Accounts Panel */}
-            <section className="bg-slate-900/40 backdrop-blur-xl p-6 rounded-2xl border border-slate-800/60 shadow-xl">
-              <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-slate-800 rounded-lg"><Settings className="w-5 h-5 text-indigo-400" /></div>
-                <div>
-                  <h2 className="text-lg font-semibold text-white">SMTP Rotation Accounts</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">Use 16-character App Passwords, not your standard password.</p>
-                </div>
-              </div>
-              <div className="space-y-3">
-                {accounts.map((acc, idx) => (
-                  <div key={idx} className="flex flex-col sm:flex-row gap-3">
-                    <div className="relative flex-1">
-                      <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                      <input
-                        placeholder={`Account ${idx + 1} Email`}
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-200 placeholder-slate-600 transition-all outline-none"
-                        value={acc.user}
-                        onChange={(e) => {
-                          const newAccs = [...accounts];
-                          newAccs[idx].user = e.target.value;
-                          setAccounts(newAccs);
-                        }}
-                      />
-                    </div>
-                    <div className="relative flex-1">
-                      <KeyRound className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
-                      <input
-                        type="password"
-                        placeholder="App Password"
-                        className="w-full bg-slate-950 border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-200 placeholder-slate-600 transition-all outline-none"
-                        value={acc.pass}
-                        onChange={(e) => {
-                          const newAccs = [...accounts];
-                          newAccs[idx].pass = e.target.value;
-                          setAccounts(newAccs);
-                        }}
-                      />
-                    </div>
+          {/* CAMPAIGN TAB */}
+          {activeTab === 'campaign' && (
+            <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="xl:col-span-7 space-y-8">
+                {/* SMTP Config */}
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <Settings className="w-4 h-4" /> SMTP Rotation (Gmail)
+                  </h2>
+                  <div className="space-y-3">
+                    {accounts.map((acc, idx) => (
+                      <div key={idx} className="flex gap-3 group">
+                        <input placeholder="Email" value={acc.user} onChange={e => {const n=[...accounts]; n[idx].user=e.target.value; setAccounts(n)}} className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-indigo-500/50 outline-none transition-all" />
+                        <input type="password" placeholder="App Pass" value={acc.pass} onChange={e => {const n=[...accounts]; n[idx].pass=e.target.value; setAccounts(n)}} className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-indigo-500/50 outline-none transition-all" />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            </section>
+                </section>
 
-            {/* Recipients Panel */}
-            <section className="bg-slate-900/40 backdrop-blur-xl p-6 rounded-2xl border border-slate-800/60 shadow-xl">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="p-2 bg-slate-800 rounded-lg"><Users className="w-5 h-5 text-blue-400" /></div>
-                  <h2 className="text-lg font-semibold text-white">Target Recipients</h2>
+                {/* Recipients */}
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                      <Users className="w-4 h-4" /> Recipients
+                    </h2>
+                    <button onClick={handleEnrich} disabled={isEnriching} className="text-xs flex items-center gap-2 font-bold text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all">
+                      {isEnriching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      Enrich Leads
+                    </button>
+                  </div>
+                  <textarea value={recipientText} onChange={e => setRecipientText(e.target.value)} className="w-full h-40 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-400 focus:border-indigo-500/50 outline-none resize-none" />
+                </section>
+
+                {/* Template */}
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <FileText className="w-4 h-4" /> Email Sequence
+                  </h2>
+                  <input placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold mb-4 focus:border-indigo-500/50 outline-none" />
+                  <textarea value={body} onChange={e => setBody(e.target.value)} className="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono focus:border-indigo-500/50 outline-none resize-none" />
+                </section>
+              </div>
+
+              {/* Execution Panel */}
+              <div className="xl:col-span-5">
+                <div className="sticky top-10 space-y-8">
+                  <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-3xl shadow-2xl shadow-indigo-500/20 text-white relative overflow-hidden">
+                    <div className="relative z-10">
+                      <h2 className="text-2xl font-bold mb-2">Ready to launch?</h2>
+                      <p className="text-indigo-100/70 text-sm mb-8">Review your rotation settings and click to begin outreach.</p>
+                      
+                      <div className="grid grid-cols-2 gap-4 mb-8">
+                        <div className="bg-white/10 p-4 rounded-2xl">
+                          <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Min Delay</label>
+                          <input type="number" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full" />
+                        </div>
+                        <div className="bg-white/10 p-4 rounded-2xl">
+                          <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Max Delay</label>
+                          <input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full" />
+                        </div>
+                      </div>
+
+                      <button onClick={handleStart} disabled={status === 'running'} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
+                        {status === 'running' ? 'Campaign Active...' : 'Start Now'}
+                      </button>
+                    </div>
+                  </section>
+
+                  {/* Terminal Logs */}
+                  <section className="bg-[#111113] rounded-2xl border border-slate-800/40 shadow-sm overflow-hidden flex flex-col h-[400px]">
+                    <div className="px-4 py-3 bg-slate-900/50 border-b border-slate-800/50 flex items-center justify-between">
+                      <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><Terminal className="w-3 h-3" /> System Logs</span>
+                      <button onClick={() => setLogs([])} className="text-slate-600 hover:text-slate-400"><RefreshCcw className="w-3 h-3" /></button>
+                    </div>
+                    <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-2">
+                      {logs.length === 0 && <div className="text-slate-700 italic">Standby...</div>}
+                      {logs.map((l, i) => (
+                        <div key={i} className={`flex gap-3 ${l.type === 'success' ? 'text-emerald-400' : l.type === 'error' ? 'text-rose-400' : 'text-slate-400'}`}>
+                          <span className="opacity-30">{new Date(l.timestamp).toLocaleTimeString([], { hour12: false })}</span>
+                          <span>{l.text}</span>
+                        </div>
+                      ))}
+                      <div ref={logEndRef} />
+                    </div>
+                  </section>
                 </div>
-                <button 
-                  onClick={handleEnrich}
-                  disabled={isEnriching}
-                  className="text-xs flex items-center gap-1.5 font-bold text-indigo-400 hover:text-indigo-300 bg-indigo-500/10 hover:bg-indigo-500/20 px-3 py-1.5 rounded-lg transition-all border border-indigo-500/20 disabled:opacity-50"
-                >
-                  {isEnriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                  {isEnriching ? 'Enriching...' : 'Enrich Data'}
+              </div>
+            </div>
+          )}
+
+          {/* INBOX TAB */}
+          {activeTab === 'inbox' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+               <header className="flex justify-between items-end">
+                <div>
+                  <h1 className="text-3xl font-bold text-white mb-2">Unified Inbox</h1>
+                  <p className="text-slate-500">Replies from your connected Gmail accounts.</p>
+                </div>
+                <button onClick={fetchInbox} disabled={loadingInbox} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-50">
+                  {loadingInbox ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+                  Check for Replies
                 </button>
+              </header>
+
+              <div className="bg-[#111113] rounded-3xl border border-slate-800/40 overflow-hidden shadow-xl">
+                {replies.length === 0 ? (
+                  <div className="p-20 text-center flex flex-col items-center gap-4">
+                    <Inbox className="w-12 h-12 text-slate-800" />
+                    <p className="text-slate-600 font-medium">No replies found in connected accounts.</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-slate-800/50">
+                    {replies.map((reply, i) => (
+                      <div key={i} className="p-6 flex items-center gap-6 hover:bg-white/[0.02] cursor-pointer transition-colors group">
+                         <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-all">
+                            <Mail className="w-5 h-5 text-indigo-400" />
+                         </div>
+                         <div className="flex-1">
+                            <div className="flex justify-between items-center mb-1">
+                               <h3 className="font-bold text-white">{reply.from}</h3>
+                               <span className="text-[10px] text-slate-600 uppercase font-bold">{new Date(reply.date).toLocaleDateString()}</span>
+                            </div>
+                            <p className="text-sm text-slate-400">{reply.subject}</p>
+                         </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-              <p className="text-xs text-slate-400 mb-3 ml-1">Format: <span className="text-indigo-300 font-mono">email, name, business</span></p>
-              <textarea
-                className="w-full bg-slate-950 border border-slate-800 focus:border-blue-500 focus:ring-1 focus:ring-blue-500 rounded-xl p-4 h-40 text-sm text-slate-300 placeholder-slate-600 font-mono leading-relaxed transition-all outline-none resize-y"
-                value={recipientText}
-                onChange={(e) => setRecipientText(e.target.value)}
-              />
-            </section>
-
-            {/* Template Panel */}
-            <section className="bg-slate-900/40 backdrop-blur-xl p-6 rounded-2xl border border-slate-800/60 shadow-xl">
-               <div className="flex items-center gap-3 mb-6">
-                <div className="p-2 bg-slate-800 rounded-lg"><FileText className="w-5 h-5 text-purple-400" /></div>
-                <div>
-                  <h2 className="text-lg font-semibold text-white">Email Template</h2>
-                  <p className="text-xs text-slate-400 mt-0.5">Use <span className="text-purple-300 font-mono">{"{{name}}"}</span> and <span className="text-purple-300 font-mono">{"{{business}}"}</span> for personalization.</p>
-                </div>
-              </div>
-              <div className="space-y-4">
-                <div>
-                  <label className="text-xs font-semibold tracking-wide text-slate-400 uppercase ml-1 block mb-2">Subject Line</label>
-                  <input
-                    placeholder="Enter subject..."
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 rounded-xl px-4 py-3 text-sm text-slate-200 transition-all outline-none"
-                    value={subject}
-                    onChange={(e) => setSubject(e.target.value)}
-                  />
-                </div>
-                <div>
-                   <label className="text-xs font-semibold tracking-wide text-slate-400 uppercase ml-1 block mb-2">HTML Body</label>
-                  <textarea
-                    placeholder="<p>Hello world</p>"
-                    className="w-full bg-slate-950 border border-slate-800 focus:border-purple-500 focus:ring-1 focus:ring-purple-500 rounded-xl p-4 h-56 text-sm text-slate-300 font-mono leading-relaxed transition-all outline-none resize-y"
-                    value={body}
-                    onChange={(e) => setBody(e.target.value)}
-                  />
-                </div>
-              </div>
-            </section>
-          </div>
-
-          {/* Right Column: Controls & Logs (Takes up 5 cols) */}
-          <div className="lg:col-span-5 space-y-6">
-            
-            <div className="sticky top-8 space-y-6">
-              
-              {/* Controls Panel */}
-              <section className="bg-slate-900/60 backdrop-blur-xl p-6 rounded-2xl border border-slate-800/60 shadow-2xl">
-                <div className="flex items-center justify-between mb-6">
-                   <h2 className="text-lg font-semibold text-white">Launch Control</h2>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4 mb-8 bg-slate-950/50 p-4 rounded-xl border border-slate-800/40">
-                  <div>
-                    <label className="flex items-center gap-1.5 text-xs font-medium text-slate-400 mb-2">
-                      <Clock className="w-3.5 h-3.5" /> Min Delay (s)
-                    </label>
-                    <input type="number" className="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm text-white outline-none" value={delayMin} onChange={(e) => setDelayMin(Number(e.target.value))} />
-                  </div>
-                  <div>
-                    <label className="flex items-center gap-1.5 text-xs font-medium text-slate-400 mb-2">
-                      <Clock className="w-3.5 h-3.5" /> Max Delay (s)
-                    </label>
-                    <input type="number" className="w-full bg-slate-900 border border-slate-700 focus:border-indigo-500 rounded-lg px-3 py-2 text-sm text-white outline-none" value={delayMax} onChange={(e) => setDelayMax(Number(e.target.value))} />
-                  </div>
-                </div>
-
-                <div className="flex gap-3">
-                  <button
-                    disabled={status === 'running'}
-                    onClick={handleStart}
-                    className="flex-1 bg-gradient-to-r from-indigo-600 to-blue-600 hover:from-indigo-500 hover:to-blue-500 text-white shadow-lg shadow-indigo-900/20 disabled:opacity-50 disabled:grayscale transition-all py-3.5 rounded-xl font-bold flex items-center justify-center gap-2 group"
-                  >
-                    <Play className="w-5 h-5 group-hover:scale-110 transition-transform" /> 
-                    {status === 'running' ? 'Sending...' : 'Initiate Outreach'}
-                  </button>
-                  <button
-                    onClick={handleReset}
-                    title="Reset Status & Clear Logs"
-                    className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition-colors px-5 rounded-xl flex items-center justify-center"
-                  >
-                    <RefreshCcw className="w-5 h-5" />
-                  </button>
-                </div>
-              </section>
-
-              {/* Terminal / Logs Panel */}
-              <section className="bg-black/80 backdrop-blur-md rounded-2xl border border-slate-800/80 shadow-2xl overflow-hidden flex flex-col h-[500px]">
-                {/* Terminal Header */}
-                <div className="bg-slate-900/80 px-4 py-3 border-b border-slate-800 flex items-center gap-4">
-                  <div className="flex gap-1.5">
-                    <div className="w-3 h-3 rounded-full bg-red-500/80"></div>
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/80"></div>
-                    <div className="w-3 h-3 rounded-full bg-green-500/80"></div>
-                  </div>
-                  <div className="flex items-center gap-2 text-slate-400 text-xs font-mono font-medium mx-auto -ml-8">
-                    <Terminal className="w-3.5 h-3.5" /> process_logs.sh
-                  </div>
-                </div>
-                
-                {/* Terminal Body */}
-                <div className="flex-1 p-5 overflow-y-auto font-mono text-[13px] leading-relaxed space-y-2.5 custom-scrollbar">
-                  {logs.length === 0 && (
-                    <div className="text-slate-600 flex flex-col items-center justify-center h-full gap-3 opacity-50">
-                      <Terminal className="w-10 h-10" />
-                      <p>System idle. Waiting for execution command.</p>
-                    </div>
-                  )}
-                  {logs.map((log, i) => (
-                    <div key={i} className="flex items-start gap-3 hover:bg-white/[0.02] p-1 -mx-1 rounded transition-colors break-words">
-                      <span className="text-slate-600 shrink-0 select-none">
-                        {new Date(log.timestamp).toLocaleTimeString([], { hour12: false })}
-                      </span>
-                      <span className={`flex-1 ${
-                        log.type === 'success' ? 'text-emerald-400' : 
-                        log.type === 'error' ? 'text-rose-400' : 
-                        log.type === 'info' ? 'text-sky-400' : 'text-slate-300'
-                      }`}>
-                        {log.text}
-                      </span>
-                    </div>
-                  ))}
-                  <div ref={logEndRef} className="h-1" />
-                </div>
-              </section>
-
             </div>
-          </div>
+          )}
+
+          {/* ANALYTICS TAB */}
+          {activeTab === 'analytics' && (
+            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 text-center py-20">
+              <div className="p-10 bg-[#111113] border border-slate-800/40 rounded-[40px] max-w-lg mx-auto shadow-2xl">
+                 <div className="w-20 h-20 bg-indigo-600/10 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-indigo-500/20">
+                    <BarChart3 className="w-10 h-10 text-indigo-400" />
+                 </div>
+                 <h2 className="text-2xl font-bold text-white mb-2">Campaign Intelligence</h2>
+                 <p className="text-slate-500 text-sm leading-relaxed mb-8">
+                    Open tracking is active! Once your campaign starts receiving opens, your engagement data will appear here.
+                 </p>
+                 <div className="grid grid-cols-2 gap-4">
+                    <div className="p-6 bg-slate-950 rounded-2xl border border-slate-900">
+                       <div className="text-slate-600 text-[10px] uppercase font-bold tracking-widest mb-1">Avg. Opens</div>
+                       <div className="text-3xl font-black text-indigo-500">--%</div>
+                    </div>
+                    <div className="p-6 bg-slate-950 rounded-2xl border border-slate-900">
+                       <div className="text-slate-600 text-[10px] uppercase font-bold tracking-widest mb-1">Total Sends</div>
+                       <div className="text-3xl font-black text-slate-400">0</div>
+                    </div>
+                 </div>
+              </div>
+            </div>
+          )}
 
         </div>
-      </div>
+      </main>
     </div>
   );
 };
 
 export default App;
-
