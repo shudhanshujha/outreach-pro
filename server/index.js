@@ -7,6 +7,10 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+app.get('/', (req, res) => {
+  res.send('OutreachPro Backend is running!');
+});
+
 let logs = [];
 let status = 'idle'; // idle, running, completed
 
