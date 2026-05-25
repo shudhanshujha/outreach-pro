@@ -25,13 +25,32 @@ app.get('/', (req, res) => {
 app.get('/api/t/:id.png', (req, res) => {
   const id = req.params.id;
   try {
-    const stmt = db.prepare('UPDATE sent_emails SET opened_at = CURRENT_TIMESTAMP WHERE id = ? AND opened_at IS NULL');
-    stmt.run(id);
+    // Check if it's already been opened
+    const emailData = db.prepare('SELECT * FROM sent_emails WHERE id = ?').get(id);
+    
+    if (emailData && !emailData.opened_at) {
+      db.prepare('UPDATE sent_emails SET opened_at = CURRENT_TIMESTAMP WHERE id = ?').run(id);
+      
+      // SCHEDULE FOLLOW-UPS (3, 7, 10, 15 days)
+      const campaignId = emailData.campaign_id;
+      const recipientEmail = emailData.recipient_email;
+      const accountEmail = emailData.account_email;
+      const followUps = db.prepare('SELECT * FROM follow_ups WHERE campaign_id = ?').all(campaignId);
+
+      for (const fu of followUps) {
+        const scheduledTime = new Date();
+        scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
+        
+        db.prepare(`
+          INSERT INTO scheduled_emails (id, campaign_id, recipient_email, account_email, subject, body, scheduled_at)
+          VALUES (?, ?, ?, ?, ?, ?, ?)
+        `).run(uuidv4(), campaignId, recipientEmail, accountEmail, fu.subject, fu.body, scheduledTime.toISOString());
+      }
+    }
   } catch (err) {
     console.error('Tracking error:', err);
   }
   
-  // Return a 1x1 transparent PNG
   const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
   res.writeHead(200, {
     'Content-Type': 'image/png',
@@ -41,12 +60,60 @@ app.get('/api/t/:id.png', (req, res) => {
   res.end(pixel);
 });
 
+// --- BACKGROUND WORKER (Runs every 1 hour) ---
+async function runBackgroundWorker() {
+  console.log('Running Follow-up Worker...');
+  try {
+    const now = new Date().toISOString();
+    const pending = db.prepare('SELECT * FROM scheduled_emails WHERE status = "pending" AND scheduled_at <= ?').all(now);
+
+    for (const email of pending) {
+      const account = db.prepare('SELECT pass FROM accounts WHERE email = ?').get(email.account_email);
+      if (!account) continue;
+
+      try {
+        const transporter = nodemailer.createTransport({
+          service: 'gmail',
+          auth: { user: email.account_email, pass: account.pass }
+        });
+
+        // Add tracking to follow-up too
+        const sentId = uuidv4();
+        const trackingPixel = `<img src="${BASE_URL}/api/t/${sentId}.png" width="1" height="1" style="display:none" />`;
+        const unsubLink = `<div style="margin-top:50px; font-size:12px; color:#666">Don't want these emails? <a href="${BASE_URL}/api/unsubscribe/${email.recipient_email}">Unsubscribe here</a></div>`;
+
+        await transporter.sendMail({
+          from: email.account_email,
+          to: email.recipient_email,
+          subject: email.subject,
+          html: email.body + trackingPixel + unsubLink
+        });
+
+        db.prepare('UPDATE scheduled_emails SET status = "sent" WHERE id = ?').run(email.id);
+        db.prepare('INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES (?, ?, ?, ?, ?)')
+          .run(sentId, email.campaign_id, email.recipient_email, email.account_email, 'sent');
+        
+        console.log(`Follow-up sent to ${email.recipient_email}`);
+      } catch (err) {
+        console.error(`Follow-up failed for ${email.recipient_email}:`, err.message);
+      }
+    }
+  } catch (err) {
+    console.error('Worker error:', err);
+  }
+}
+
+setInterval(runBackgroundWorker, 1000 * 60 * 60); // Every hour
+runBackgroundWorker(); // Initial run
+
 // 2. UNSUBSCRIBE
 app.get('/api/unsubscribe/:email', (req, res) => {
   const email = req.params.email;
   try {
     db.prepare('INSERT OR REPLACE INTO recipients (id, email, unsubscribed) VALUES (?, ?, 1)')
       .run(uuidv4(), email);
+    // Also cancel any scheduled emails for this person
+    db.prepare('UPDATE scheduled_emails SET status = "cancelled" WHERE recipient_email = ? AND status = "pending"').run(email);
     res.send('<h1>You have been unsubscribed.</h1><p>You will no longer receive emails from us.</p>');
   } catch (err) {
     res.status(500).send('Error processing unsubscribe request.');
@@ -58,9 +125,14 @@ let activeLogs = [];
 let activeStatus = 'idle';
 
 app.post('/api/send', async (req, res) => {
-  const { accounts, recipients, subject, body, delayMin, delayMax, campaignId = uuidv4() } = req.body;
+  const { accounts, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4() } = req.body;
   
   if (activeStatus === 'running') return res.status(400).json({ error: 'Already running' });
+
+  // Save accounts to DB for follow-up worker to use later
+  for (const acc of accounts) {
+    db.prepare('INSERT OR REPLACE INTO accounts (email, pass) VALUES (?, ?)').run(acc.user, acc.pass);
+  }
 
   activeStatus = 'running';
   activeLogs = [];
@@ -71,6 +143,12 @@ app.post('/api/send', async (req, res) => {
     try {
       db.prepare('INSERT OR REPLACE INTO campaigns (id, subject, body, status) VALUES (?, ?, ?, ?)')
         .run(campaignId, subject, body, 'running');
+
+      // Save follow-up templates
+      for (const fu of followUps) {
+        db.prepare('INSERT INTO follow_ups (campaign_id, delay_days, subject, body) VALUES (?, ?, ?, ?)')
+          .run(campaignId, fu.delayDays, fu.subject, fu.body);
+      }
 
       for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i];

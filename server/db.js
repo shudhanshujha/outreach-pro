@@ -47,6 +47,18 @@ db.exec(`
     body TEXT,
     FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
   );
+
+  CREATE TABLE IF NOT EXISTS scheduled_emails (
+    id TEXT PRIMARY KEY,
+    campaign_id TEXT,
+    recipient_email TEXT,
+    account_email TEXT,
+    subject TEXT,
+    body TEXT,
+    scheduled_at DATETIME,
+    status TEXT DEFAULT 'pending',
+    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
+  );
 `);
 
 module.exports = db;

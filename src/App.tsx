@@ -13,6 +13,8 @@ interface EmailReply { subject: string; from: string; date: string; uid: number;
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
+interface FollowUp { delayDays: number; subject: string; body: string; }
+
 const App: React.FC = () => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
@@ -22,6 +24,12 @@ const App: React.FC = () => {
   const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
   const [body, setBody] = useState('<p>Hi {{name}},</p>\n<p>I noticed your business, {{business}}, and wanted to reach out regarding a potential collaboration.</p>\n<p>Best regards,<br>Your Name</p>');
+  const [followUps, setFollowUps] = useState<FollowUp[]>([
+    { delayDays: 3, subject: 'Checking in: {{business}}', body: '<p>Hi {{name}}, just following up on my previous email...</p>' },
+    { delayDays: 7, subject: 'Still interested?', body: '<p>Hi {{name}}, following up again...</p>' },
+    { delayDays: 10, subject: 'Quick question', body: '<p>Hi {{name}}, following up for the third time...</p>' },
+    { delayDays: 15, subject: 'Final follow up', body: '<p>Hi {{name}}, this is my final follow up...</p>' },
+  ]);
   const [delayMin, setDelayMin] = useState(30);
   const [delayMax, setDelayMax] = useState(90);
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -69,10 +77,24 @@ const App: React.FC = () => {
       return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
     });
     try {
-      await axios.post(`${API_BASE_URL}/api/send`, { accounts: validAccs, recipients, subject, body, delayMin, delayMax });
+      await axios.post(`${API_BASE_URL}/api/send`, { 
+        accounts: validAccs, 
+        recipients, 
+        subject, 
+        body, 
+        delayMin, 
+        delayMax,
+        followUps
+      });
       setStatus('running');
       setActiveTab('campaign');
     } catch (err) { alert('Failed to start'); }
+  };
+
+  const updateFollowUp = (index: number, field: keyof FollowUp, value: any) => {
+    const newFollowUps = [...followUps];
+    newFollowUps[index] = { ...newFollowUps[index], [field]: value };
+    setFollowUps(newFollowUps);
   };
 
   const fetchInbox = async () => {
@@ -160,10 +182,38 @@ const App: React.FC = () => {
                 {/* Template */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                    <FileText className="w-4 h-4" /> Email Sequence
+                    <FileText className="w-4 h-4" /> Initial Email
                   </h2>
                   <input placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold mb-4 focus:border-indigo-500/50 outline-none" />
                   <textarea value={body} onChange={e => setBody(e.target.value)} className="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono focus:border-indigo-500/50 outline-none resize-none" />
+                </section>
+
+                {/* Follow-up Sequence */}
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                    <Clock className="w-4 h-4" /> Follow-up Sequence (Triggers on Open)
+                  </h2>
+                  <div className="space-y-6">
+                    {followUps.map((fu, idx) => (
+                      <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
+                          <input 
+                            placeholder="Follow-up Subject" 
+                            value={fu.subject} 
+                            onChange={e => updateFollowUp(idx, 'subject', e.target.value)}
+                            className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50" 
+                          />
+                        </div>
+                        <textarea 
+                          placeholder="Follow-up Body" 
+                          value={fu.body} 
+                          onChange={e => updateFollowUp(idx, 'body', e.target.value)}
+                          className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none" 
+                        />
+                      </div>
+                    ))}
+                  </div>
                 </section>
               </div>
 
