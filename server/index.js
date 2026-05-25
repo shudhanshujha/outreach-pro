@@ -1,128 +1,173 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
-const { parse } = require('csv-parse/sync');
+const { v4: uuidv4 } = require('uuid');
+const db = require('./db');
+const { ImapFlow } = require('imapflow');
 const app = express();
-
-const axios = require('axios');
 
 app.use(cors());
 app.use(express.json());
 
+const PORT = process.env.PORT || 3001;
+const BASE_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
+
+// --- HELPERS ---
+const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+
+// --- ROUTES ---
+
 app.get('/', (req, res) => {
-  res.send('OutreachPro Backend is running!');
+  res.send('OutreachPro Backend Pro is running!');
 });
 
-// Enrichment Route
-app.post('/api/enrich', async (req, res) => {
-  const { emails } = req.body;
-  const apiKey = process.env.HUNTER_API_KEY;
-
-  if (!apiKey) {
-    return res.status(400).json({ error: 'Hunter.io API Key is missing on the server.' });
+// 1. OPEN TRACKING PIXEL
+app.get('/api/t/:id.png', (req, res) => {
+  const id = req.params.id;
+  try {
+    const stmt = db.prepare('UPDATE sent_emails SET opened_at = CURRENT_TIMESTAMP WHERE id = ? AND opened_at IS NULL');
+    stmt.run(id);
+  } catch (err) {
+    console.error('Tracking error:', err);
   }
-
-  const enrichedData = [];
   
-  for (const email of emails) {
-    try {
-      // Using Hunter.io Email Verifier API which also returns some info
-      const response = await axios.get(`https://api.hunter.io/v2/email-verifier?email=${email}&api_key=${apiKey}`);
-      const data = response.data.data;
-      
-      enrichedData.push({
-        email,
-        name: data.first_name ? `${data.first_name} ${data.last_name || ''}`.trim() : 'Unknown',
-        business: data.domain || 'N/A',
-        status: data.result
-      });
-    } catch (err) {
-      enrichedData.push({ email, name: 'Failed', business: 'N/A', status: 'error' });
-    }
-  }
-
-  res.json({ enrichedData });
+  // Return a 1x1 transparent PNG
+  const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+  res.writeHead(200, {
+    'Content-Type': 'image/png',
+    'Content-Length': pixel.length,
+    'Cache-Control': 'no-cache, no-store, must-revalidate'
+  });
+  res.end(pixel);
 });
 
-let logs = [];
-let status = 'idle'; // idle, running, completed
+// 2. UNSUBSCRIBE
+app.get('/api/unsubscribe/:email', (req, res) => {
+  const email = req.params.email;
+  try {
+    db.prepare('INSERT OR REPLACE INTO recipients (id, email, unsubscribed) VALUES (?, ?, 1)')
+      .run(uuidv4(), email);
+    res.send('<h1>You have been unsubscribed.</h1><p>You will no longer receive emails from us.</p>');
+  } catch (err) {
+    res.status(500).send('Error processing unsubscribe request.');
+  }
+});
+
+// 3. SEND CAMPAIGN
+let activeLogs = [];
+let activeStatus = 'idle';
 
 app.post('/api/send', async (req, res) => {
-  const { accounts, recipients, subject, body, delayMin, delayMax } = req.body;
+  const { accounts, recipients, subject, body, delayMin, delayMax, campaignId = uuidv4() } = req.body;
   
-  if (status === 'running') {
-    return res.status(400).json({ error: 'Outreach already in progress' });
-  }
+  if (activeStatus === 'running') return res.status(400).json({ error: 'Already running' });
 
-  status = 'running';
-  logs = [];
-  res.json({ message: 'Outreach started' });
+  activeStatus = 'running';
+  activeLogs = [];
+  res.json({ message: 'Campaign initiated', campaignId });
 
-  // Start the process in the background
+  // Background execution
   (async () => {
     try {
-      const minDelay = parseInt(delayMin) * 1000;
-      const maxDelay = parseInt(delayMax) * 1000;
+      db.prepare('INSERT OR REPLACE INTO campaigns (id, subject, body, status) VALUES (?, ?, ?, ?)')
+        .run(campaignId, subject, body, 'running');
 
       for (let i = 0; i < recipients.length; i++) {
         const recipient = recipients[i];
-        const account = accounts[i % accounts.length];
+        
+        // Check if unsubscribed
+        const isUnsubbed = db.prepare('SELECT unsubscribed FROM recipients WHERE email = ?').get(recipient.email);
+        if (isUnsubbed && isUnsubbed.unsubscribed) {
+          activeLogs.push({ text: `Skipping ${recipient.email} (Unsubscribed)`, type: 'info', timestamp: new Date() });
+          continue;
+        }
 
-        const logEntry = `[${i + 1}/${recipients.length}] Sending to ${recipient.email} using ${account.user}...`;
-        console.log(logEntry);
-        logs.push({ text: logEntry, timestamp: new Date().toISOString() });
+        const account = accounts[i % accounts.length];
+        const sentId = uuidv4();
+
+        const logMsg = `[${i+1}/${recipients.length}] Sending to ${recipient.email}...`;
+        activeLogs.push({ text: logMsg, timestamp: new Date() });
 
         try {
           const transporter = nodemailer.createTransport({
             service: 'gmail',
-            auth: {
-              user: account.user,
-              pass: account.pass
-            }
+            auth: { user: account.user, pass: account.pass }
           });
 
-          const personalizedSubject = subject.replace(/{{(\w+)}}/g, (_, key) => recipient[key] || '');
-          const personalizedHtml = body.replace(/{{(\w+)}}/g, (_, key) => recipient[key] || '');
+          // Inject Tracking & Unsubscribe
+          const trackingPixel = `<img src="${BASE_URL}/api/t/${sentId}.png" width="1" height="1" style="display:none" />`;
+          const unsubLink = `<div style="margin-top:50px; font-size:12px; color:#666">Don't want these emails? <a href="${BASE_URL}/api/unsubscribe/${recipient.email}">Unsubscribe here</a></div>`;
+          
+          const pSubject = subject.replace(/{{(\w+)}}/g, (_, k) => recipient[k] || '');
+          const pBody = body.replace(/{{(\w+)}}/g, (_, k) => recipient[k] || '') + trackingPixel + unsubLink;
 
           await transporter.sendMail({
             from: account.user,
             to: recipient.email,
-            subject: personalizedSubject,
-            html: personalizedHtml
+            subject: pSubject,
+            html: pBody
           });
 
-          logs.push({ text: `✓ Sent successfully to ${recipient.email}`, type: 'success', timestamp: new Date().toISOString() });
-        } catch (error) {
-          logs.push({ text: `✗ Failed to send to ${recipient.email}: ${error.message}`, type: 'error', timestamp: new Date().toISOString() });
+          db.prepare('INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES (?, ?, ?, ?, ?)')
+            .run(sentId, campaignId, recipient.email, account.user, 'sent');
+          
+          activeLogs.push({ text: `✓ Sent to ${recipient.email}`, type: 'success', timestamp: new Date() });
+        } catch (err) {
+          activeLogs.push({ text: `✗ Error for ${recipient.email}: ${err.message}`, type: 'error', timestamp: new Date() });
         }
 
         if (i < recipients.length - 1) {
-          const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1) + minDelay);
-          const waitMsg = `Waiting ${Math.round(delay / 1000)}s...`;
-          logs.push({ text: waitMsg, type: 'info', timestamp: new Date().toISOString() });
-          await new Promise(resolve => setTimeout(resolve, delay));
+          const delay = Math.floor(Math.random() * (delayMax - delayMin + 1) + delayMin) * 1000;
+          await sleep(delay);
         }
       }
-      status = 'completed';
-      logs.push({ text: 'Outreach complete!', type: 'success', timestamp: new Date().toISOString() });
+      activeStatus = 'completed';
+      db.prepare('UPDATE campaigns SET status = ? WHERE id = ?').run('completed', campaignId);
     } catch (err) {
-      status = 'idle';
-      logs.push({ text: `CRITICAL ERROR: ${err.message}`, type: 'error', timestamp: new Date().toISOString() });
+      activeStatus = 'idle';
+      console.error('Fatal send error:', err);
     }
   })();
 });
 
-app.get('/api/logs', (res, resObj) => {
-  resObj.json({ logs, status });
+// 4. INTEGRATED INBOX (FETCHER)
+app.post('/api/inbox', async (req, res) => {
+  const { account } = req.body; // { user, pass }
+  
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: { user: account.user, pass: account.pass }
+  });
+
+  try {
+    await client.connect();
+    let lock = await client.getMailboxLock('INBOX');
+    const messages = [];
+    
+    try {
+      // Fetch last 10 messages
+      for await (let msg of client.fetch({ last: 10 }, { envelope: true, bodyStructure: true })) {
+        messages.push({
+          subject: msg.envelope.subject,
+          from: msg.envelope.from[0].address,
+          date: msg.envelope.date,
+          uid: msg.uid
+        });
+      }
+    } finally {
+      lock.release();
+    }
+    await client.logout();
+    res.json({ messages });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
-app.post('/api/reset', (req, res) => {
-  status = 'idle';
-  logs = [];
-  res.json({ message: 'Reset successful' });
+app.get('/api/logs', (req, res) => {
+  res.json({ logs: activeLogs, status: activeStatus });
 });
 
-const PORT = process.env.PORT || 3001;
-app.listen(PORT, () => {
-  console.log(`Backend running on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Backend Pro running on port ${PORT}`));
