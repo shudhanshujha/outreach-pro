@@ -16,7 +16,51 @@ const BASE_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 app.get('/', (req, res) => {
-  res.send('OutreachPro Backend Pro is running with OAuth2!');
+  res.send('OutreachPro Backend Pro is running with Streamlined OAuth!');
+});
+
+// --- ONE-CLICK OAUTH FLOW ---
+
+const oauth2Client = new google.auth.OAuth2(
+  process.env.GOOGLE_CLIENT_ID,
+  process.env.GOOGLE_CLIENT_SECRET,
+  `${BASE_URL}/api/auth/callback`
+);
+
+app.get('/api/auth/google', (req, res) => {
+  const url = oauth2Client.generateAuthUrl({
+    access_type: 'offline',
+    prompt: 'consent',
+    scope: ['https://mail.google.com/', 'https://www.googleapis.com/auth/userinfo.email']
+  });
+  res.redirect(url);
+});
+
+app.get('/api/auth/callback', async (req, res) => {
+  const { code } = req.query;
+  try {
+    const { tokens } = await oauth2Client.getToken(code);
+    
+    // Get user email
+    const ticket = await oauth2Client.verifyIdToken({
+      idToken: tokens.id_token,
+      audience: process.env.GOOGLE_CLIENT_ID
+    });
+    const email = ticket.getPayload().email;
+
+    // Save to DB
+    db.prepare('INSERT OR REPLACE INTO accounts (email, clientId, clientSecret, refreshToken) VALUES (?, ?, ?, ?)')
+      .run(email, process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, tokens.refresh_token);
+
+    res.send('<h1>Account Connected Successfully!</h1><p>You can close this window now.</p><script>setTimeout(() => window.close(), 2000)</script>');
+  } catch (err) {
+    res.status(500).send(`Auth Error: ${err.message}`);
+  }
+});
+
+app.get('/api/accounts', (req, res) => {
+  const accounts = db.prepare('SELECT email FROM accounts').all();
+  res.json({ accounts });
 });
 
 // 1. OPEN TRACKING PIXEL

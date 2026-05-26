@@ -3,11 +3,11 @@ import axios from 'axios';
 import { 
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
-  Inbox, ListTree, Clock
+  Inbox, ListTree, Clock, ExternalLink, CheckCircle2
 } from 'lucide-react';
 
 // --- TYPES ---
-interface Account { user: string; clientId: string; clientSecret: string; refreshToken: string; }
+interface Account { email: string; }
 interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestamp: string; }
 interface EmailReply { subject: string; from: string; date: string; uid: number; }
 interface FollowUp { delayDays: number; subject: string; body: string; }
@@ -17,13 +17,7 @@ const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 const App: React.FC = () => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
-  const [accounts, setAccounts] = useState<Account[]>([
-    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
-    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
-    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
-    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
-    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
-  ]);
+  const [connectedAccounts, setConnectedAccounts] = useState<Account[]>([]);
   const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
   const [body, setBody] = useState('<p>Hi {{name}},</p>\n<p>I noticed your business, {{business}}, and wanted to reach out regarding a potential collaboration.</p>\n<p>Best regards,<br>Your Name</p>');
@@ -45,6 +39,7 @@ const App: React.FC = () => {
 
   // --- EFFECTS ---
   useEffect(() => {
+    fetchConnectedAccounts();
     let interval: any;
     if (status === 'running') {
       interval = setInterval(async () => {
@@ -61,6 +56,20 @@ const App: React.FC = () => {
   useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIONS ---
+  const fetchConnectedAccounts = async () => {
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/accounts`);
+      setConnectedAccounts(res.data.accounts);
+    } catch (err) { console.error('Failed to load accounts'); }
+  };
+
+  const handleConnectAccount = () => {
+    window.open(`${API_BASE_URL}/api/auth/google`, 'Connect Gmail', 'width=600,height=700');
+    // Poll for new accounts every 3 seconds for a bit
+    const poll = setInterval(fetchConnectedAccounts, 3000);
+    setTimeout(() => clearInterval(poll), 30000);
+  };
+
   const handleEnrich = async () => {
     const emails = recipientText.split('\n').map(l => l.split(',')[0].trim()).filter(e => e);
     if (emails.length === 0) return alert('Enter emails first');
@@ -73,15 +82,16 @@ const App: React.FC = () => {
   };
 
   const handleStart = async () => {
-    const validAccs = accounts.filter(a => a.user && a.clientId && a.clientSecret && a.refreshToken);
-    if (validAccs.length === 0) return alert('Add at least one account with full OAuth details');
+    if (connectedAccounts.length === 0) return alert('Connect at least one Gmail account first.');
     const recipients = recipientText.split('\n').filter(l => l.trim()).map(line => {
       const p = line.split(',').map(s => s.trim());
       return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
     });
     try {
+      // In one-click mode, backend already has the tokens in DB
+      // We just pass the emails we want to use
       await axios.post(`${API_BASE_URL}/api/send`, { 
-        accounts: validAccs, 
+        accounts: connectedAccounts.map(a => ({ user: a.email })), 
         recipients, 
         subject, 
         body, 
@@ -94,12 +104,6 @@ const App: React.FC = () => {
     } catch (err) { alert('Failed to start'); }
   };
 
-  const updateAccount = (index: number, field: keyof Account, value: string) => {
-    const newAccounts = [...accounts];
-    newAccounts[index][field] = value;
-    setAccounts(newAccounts);
-  };
-
   const updateFollowUp = (index: number, field: keyof FollowUp, value: any) => {
     const newFollowUps = [...followUps];
     newFollowUps[index] = { ...newFollowUps[index], [field]: value };
@@ -107,11 +111,11 @@ const App: React.FC = () => {
   };
 
   const fetchInbox = async () => {
-    const acc = accounts[0]; 
-    if (!acc.user) return alert('Enter account 1 details');
+    if (connectedAccounts.length === 0) return alert('Connect an account first');
     setLoadingInbox(true);
     try {
-      const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: acc });
+      // Fetch from the first connected account
+      const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: { user: connectedAccounts[0].email } });
       setReplies(res.data.messages);
     } catch (err) { alert('Failed to fetch inbox'); }
     finally { setLoadingInbox(false); }
@@ -153,21 +157,26 @@ const App: React.FC = () => {
           {activeTab === 'campaign' && (
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="xl:col-span-7 space-y-8">
+                {/* SMTP Config */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
-                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                    <Settings className="w-4 h-4" /> OAuth2 Rotation (Gmail)
-                  </h2>
-                  <div className="space-y-6">
-                    {accounts.map((acc, idx) => (
-                      <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
-                        <div className="flex gap-3">
-                          <input placeholder="Email" value={acc.user} onChange={e => updateAccount(idx, 'user', e.target.value)} className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-sm focus:border-indigo-500/50 outline-none" />
+                  <div className="flex justify-between items-center mb-6">
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                      <Settings className="w-4 h-4" /> Connected Gmail Accounts
+                    </h2>
+                    <button onClick={handleConnectAccount} className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20">
+                      <ExternalLink className="w-3.5 h-3.5" /> 🔗 Connect New Account
+                    </button>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    {connectedAccounts.length === 0 && <div className="text-slate-600 text-sm italic p-4 text-center border border-dashed border-slate-800 rounded-xl">No accounts connected yet. Click the button above to link your Gmails.</div>}
+                    {connectedAccounts.map((acc, idx) => (
+                      <div key={idx} className="flex items-center justify-between p-4 bg-slate-950 rounded-xl border border-slate-800/50 group">
+                        <div className="flex items-center gap-3">
+                           <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center"><Mail className="w-4 h-4 text-indigo-400" /></div>
+                           <span className="text-sm font-medium text-slate-200">{acc.email}</span>
                         </div>
-                        <div className="grid grid-cols-2 gap-3">
-                           <input placeholder="Client ID" value={acc.clientId} onChange={e => updateAccount(idx, 'clientId', e.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
-                           <input type="password" placeholder="Client Secret" value={acc.clientSecret} onChange={e => updateAccount(idx, 'clientSecret', e.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
-                        </div>
-                        <input type="password" placeholder="Refresh Token" value={acc.refreshToken} onChange={e => updateAccount(idx, 'refreshToken', e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
+                        <CheckCircle2 className="w-4 h-4 text-emerald-500 opacity-50" />
                       </div>
                     ))}
                   </div>
@@ -179,7 +188,7 @@ const App: React.FC = () => {
                       <Users className="w-4 h-4" /> Recipients
                     </h2>
                     <button onClick={handleEnrich} disabled={isEnriching} className="text-xs flex items-center gap-2 font-bold text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all">
-                      {isEnriching ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                      {isEnriching ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                       Enrich Leads
                     </button>
                   </div>
@@ -216,7 +225,7 @@ const App: React.FC = () => {
                 <div className="sticky top-10 space-y-8">
                   <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-3xl shadow-2xl shadow-indigo-500/20 text-white">
                     <h2 className="text-2xl font-bold mb-2 text-white">Ready to launch?</h2>
-                    <p className="text-indigo-100/70 text-sm mb-8">Using OAuth2 for 100% deliverability.</p>
+                    <p className="text-indigo-100/70 text-sm mb-8">Click to begin outreach to {recipientText.split('\n').length} leads.</p>
                     <div className="grid grid-cols-2 gap-4 mb-8">
                       <div className="bg-white/10 p-4 rounded-2xl">
                         <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Min Delay</label>
@@ -227,7 +236,7 @@ const App: React.FC = () => {
                         <input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full text-white" />
                       </div>
                     </div>
-                    <button onClick={handleStart} disabled={status === 'running'} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
+                    <button onClick={handleStart} disabled={status === 'running' || connectedAccounts.length === 0} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
                       {status === 'running' ? 'Campaign Active...' : 'Start Now'}
                     </button>
                   </section>
