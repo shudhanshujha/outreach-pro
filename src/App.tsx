@@ -7,19 +7,22 @@ import {
 } from 'lucide-react';
 
 // --- TYPES ---
-interface Account { user: string; pass: string; }
+interface Account { user: string; clientId: string; clientSecret: string; refreshToken: string; }
 interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestamp: string; }
 interface EmailReply { subject: string; from: string; date: string; uid: number; }
+interface FollowUp { delayDays: number; subject: string; body: string; }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-
-interface FollowUp { delayDays: number; subject: string; body: string; }
 
 const App: React.FC = () => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
   const [accounts, setAccounts] = useState<Account[]>([
-    { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' }, { user: '', pass: '' },
+    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
+    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
+    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
+    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
+    { user: '', clientId: '', clientSecret: '', refreshToken: '' },
   ]);
   const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
@@ -42,7 +45,7 @@ const App: React.FC = () => {
 
   // --- EFFECTS ---
   useEffect(() => {
-    let interval: number;
+    let interval: any;
     if (status === 'running') {
       interval = setInterval(async () => {
         try {
@@ -70,8 +73,8 @@ const App: React.FC = () => {
   };
 
   const handleStart = async () => {
-    const validAccs = accounts.filter(a => a.user && a.pass);
-    if (validAccs.length === 0) return alert('Add at least one account');
+    const validAccs = accounts.filter(a => a.user && a.clientId && a.clientSecret && a.refreshToken);
+    if (validAccs.length === 0) return alert('Add at least one account with full OAuth details');
     const recipients = recipientText.split('\n').filter(l => l.trim()).map(line => {
       const p = line.split(',').map(s => s.trim());
       return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
@@ -91,6 +94,12 @@ const App: React.FC = () => {
     } catch (err) { alert('Failed to start'); }
   };
 
+  const updateAccount = (index: number, field: keyof Account, value: string) => {
+    const newAccounts = [...accounts];
+    newAccounts[index][field] = value;
+    setAccounts(newAccounts);
+  };
+
   const updateFollowUp = (index: number, field: keyof FollowUp, value: any) => {
     const newFollowUps = [...followUps];
     newFollowUps[index] = { ...newFollowUps[index], [field]: value };
@@ -98,8 +107,8 @@ const App: React.FC = () => {
   };
 
   const fetchInbox = async () => {
-    const acc = accounts[0]; // Fetch from primary account
-    if (!acc.user || !acc.pass) return alert('Enter account 1 details to fetch inbox');
+    const acc = accounts[0]; 
+    if (!acc.user) return alert('Enter account 1 details');
     setLoadingInbox(true);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: acc });
@@ -110,7 +119,6 @@ const App: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-[#070708] text-slate-300 font-sans">
-      {/* Sidebar Navigation */}
       <aside className="fixed left-0 top-0 bottom-0 w-20 md:w-64 bg-[#0d0d0f] border-r border-slate-800/50 z-50 flex flex-col">
         <div className="p-6 flex items-center gap-3 border-b border-slate-800/50">
           <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/20">
@@ -118,7 +126,6 @@ const App: React.FC = () => {
           </div>
           <span className="hidden md:block font-bold text-lg text-white tracking-tight">Outreach<span className="text-indigo-500">Pro</span></span>
         </div>
-
         <nav className="flex-1 p-4 space-y-2 mt-4">
           <button onClick={() => setActiveTab('campaign')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'campaign' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <ListTree className="w-5 h-5" />
@@ -133,7 +140,6 @@ const App: React.FC = () => {
             <span className="hidden md:block font-medium">Analytics</span>
           </button>
         </nav>
-
         <div className="p-4 border-t border-slate-800/50">
            <div className="flex items-center gap-3 px-3 py-2 bg-slate-900/50 rounded-xl">
               <div className={`w-2 h-2 rounded-full ${status === 'running' ? 'bg-indigo-500 animate-pulse' : 'bg-slate-600'}`} />
@@ -142,30 +148,31 @@ const App: React.FC = () => {
         </div>
       </aside>
 
-      {/* Main Content */}
       <main className="ml-20 md:ml-64 p-6 md:p-10 relative">
         <div className="max-w-6xl mx-auto">
-          
-          {/* CAMPAIGN TAB */}
           {activeTab === 'campaign' && (
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="xl:col-span-7 space-y-8">
-                {/* SMTP Config */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                    <Settings className="w-4 h-4" /> SMTP Rotation (Gmail)
+                    <Settings className="w-4 h-4" /> OAuth2 Rotation (Gmail)
                   </h2>
-                  <div className="space-y-3">
+                  <div className="space-y-6">
                     {accounts.map((acc, idx) => (
-                      <div key={idx} className="flex gap-3 group">
-                        <input placeholder="Email" value={acc.user} onChange={e => {const n=[...accounts]; n[idx].user=e.target.value; setAccounts(n)}} className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-indigo-500/50 outline-none transition-all" />
-                        <input type="password" placeholder="App Pass" value={acc.pass} onChange={e => {const n=[...accounts]; n[idx].pass=e.target.value; setAccounts(n)}} className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-sm focus:border-indigo-500/50 outline-none transition-all" />
+                      <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
+                        <div className="flex gap-3">
+                          <input placeholder="Email" value={acc.user} onChange={e => updateAccount(idx, 'user', e.target.value)} className="flex-1 bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-sm focus:border-indigo-500/50 outline-none" />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                           <input placeholder="Client ID" value={acc.clientId} onChange={e => updateAccount(idx, 'clientId', e.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
+                           <input type="password" placeholder="Client Secret" value={acc.clientSecret} onChange={e => updateAccount(idx, 'clientSecret', e.target.value)} className="bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
+                        </div>
+                        <input type="password" placeholder="Refresh Token" value={acc.refreshToken} onChange={e => updateAccount(idx, 'refreshToken', e.target.value)} className="w-full bg-slate-900 border border-slate-800 rounded-lg px-4 py-2 text-xs outline-none" />
                       </div>
                     ))}
                   </div>
                 </section>
 
-                {/* Recipients */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <div className="flex justify-between items-center mb-6">
                     <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
@@ -179,7 +186,6 @@ const App: React.FC = () => {
                   <textarea value={recipientText} onChange={e => setRecipientText(e.target.value)} className="w-full h-40 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-400 focus:border-indigo-500/50 outline-none resize-none" />
                 </section>
 
-                {/* Template */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
                     <FileText className="w-4 h-4" /> Initial Email
@@ -188,7 +194,6 @@ const App: React.FC = () => {
                   <textarea value={body} onChange={e => setBody(e.target.value)} className="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono focus:border-indigo-500/50 outline-none resize-none" />
                 </section>
 
-                {/* Follow-up Sequence */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
                     <Clock className="w-4 h-4" /> Follow-up Sequence (Triggers on Open)
@@ -198,58 +203,40 @@ const App: React.FC = () => {
                       <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
                         <div className="flex items-center gap-3">
                           <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
-                          <input 
-                            placeholder="Follow-up Subject" 
-                            value={fu.subject} 
-                            onChange={e => updateFollowUp(idx, 'subject', e.target.value)}
-                            className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50" 
-                          />
+                          <input placeholder="Subject" value={fu.subject} onChange={e => updateFollowUp(idx, 'subject', e.target.value)} className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50" />
                         </div>
-                        <textarea 
-                          placeholder="Follow-up Body" 
-                          value={fu.body} 
-                          onChange={e => updateFollowUp(idx, 'body', e.target.value)}
-                          className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none" 
-                        />
+                        <textarea placeholder="Body" value={fu.body} onChange={e => updateFollowUp(idx, 'body', e.target.value)} className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none" />
                       </div>
                     ))}
                   </div>
                 </section>
               </div>
 
-              {/* Execution Panel */}
               <div className="xl:col-span-5">
                 <div className="sticky top-10 space-y-8">
-                  <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-3xl shadow-2xl shadow-indigo-500/20 text-white relative overflow-hidden">
-                    <div className="relative z-10">
-                      <h2 className="text-2xl font-bold mb-2">Ready to launch?</h2>
-                      <p className="text-indigo-100/70 text-sm mb-8">Review your rotation settings and click to begin outreach.</p>
-                      
-                      <div className="grid grid-cols-2 gap-4 mb-8">
-                        <div className="bg-white/10 p-4 rounded-2xl">
-                          <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Min Delay</label>
-                          <input type="number" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full" />
-                        </div>
-                        <div className="bg-white/10 p-4 rounded-2xl">
-                          <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Max Delay</label>
-                          <input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full" />
-                        </div>
+                  <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-3xl shadow-2xl shadow-indigo-500/20 text-white">
+                    <h2 className="text-2xl font-bold mb-2 text-white">Ready to launch?</h2>
+                    <p className="text-indigo-100/70 text-sm mb-8">Using OAuth2 for 100% deliverability.</p>
+                    <div className="grid grid-cols-2 gap-4 mb-8">
+                      <div className="bg-white/10 p-4 rounded-2xl">
+                        <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Min Delay</label>
+                        <input type="number" value={delayMin} onChange={e => setDelayMin(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full text-white" />
                       </div>
-
-                      <button onClick={handleStart} disabled={status === 'running'} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
-                        {status === 'running' ? 'Campaign Active...' : 'Start Now'}
-                      </button>
+                      <div className="bg-white/10 p-4 rounded-2xl">
+                        <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Max Delay</label>
+                        <input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full text-white" />
+                      </div>
                     </div>
+                    <button onClick={handleStart} disabled={status === 'running'} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
+                      {status === 'running' ? 'Campaign Active...' : 'Start Now'}
+                    </button>
                   </section>
 
-                  {/* Terminal Logs */}
                   <section className="bg-[#111113] rounded-2xl border border-slate-800/40 shadow-sm overflow-hidden flex flex-col h-[400px]">
                     <div className="px-4 py-3 bg-slate-900/50 border-b border-slate-800/50 flex items-center justify-between">
                       <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2"><Terminal className="w-3 h-3" /> System Logs</span>
-                      <button onClick={() => setLogs([])} className="text-slate-600 hover:text-slate-400"><RefreshCcw className="w-3 h-3" /></button>
                     </div>
                     <div className="flex-1 p-4 overflow-y-auto font-mono text-xs space-y-2">
-                      {logs.length === 0 && <div className="text-slate-700 italic">Standby...</div>}
                       {logs.map((l, i) => (
                         <div key={i} className={`flex gap-3 ${l.type === 'success' ? 'text-emerald-400' : l.type === 'error' ? 'text-rose-400' : 'text-slate-400'}`}>
                           <span className="opacity-30">{new Date(l.timestamp).toLocaleTimeString([], { hour12: false })}</span>
@@ -264,30 +251,28 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* INBOX TAB */}
           {activeTab === 'inbox' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
                <header className="flex justify-between items-end">
                 <div>
-                  <h1 className="text-3xl font-bold text-white mb-2">Unified Inbox</h1>
-                  <p className="text-slate-500">Replies from your connected Gmail accounts.</p>
+                  <h1 className="text-3xl font-bold text-white mb-2 text-white">Unified Inbox</h1>
+                  <p className="text-slate-500">Replies from your connected accounts.</p>
                 </div>
                 <button onClick={fetchInbox} disabled={loadingInbox} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-50">
                   {loadingInbox ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
                   Check for Replies
                 </button>
               </header>
-
               <div className="bg-[#111113] rounded-3xl border border-slate-800/40 overflow-hidden shadow-xl">
                 {replies.length === 0 ? (
                   <div className="p-20 text-center flex flex-col items-center gap-4">
                     <Inbox className="w-12 h-12 text-slate-800" />
-                    <p className="text-slate-600 font-medium">No replies found in connected accounts.</p>
+                    <p className="text-slate-600 font-medium">No replies found.</p>
                   </div>
                 ) : (
                   <div className="divide-y divide-slate-800/50">
                     {replies.map((reply, i) => (
-                      <div key={i} className="p-6 flex items-center gap-6 hover:bg-white/[0.02] cursor-pointer transition-colors group">
+                      <div key={i} className="p-6 flex items-center gap-6 hover:bg-white/[0.02] cursor-pointer group">
                          <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-all">
                             <Mail className="w-5 h-5 text-indigo-400" />
                          </div>
@@ -306,31 +291,19 @@ const App: React.FC = () => {
             </div>
           )}
 
-          {/* ANALYTICS TAB */}
           {activeTab === 'analytics' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 text-center py-20">
               <div className="p-10 bg-[#111113] border border-slate-800/40 rounded-[40px] max-w-lg mx-auto shadow-2xl">
                  <div className="w-20 h-20 bg-indigo-600/10 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-indigo-500/20">
                     <BarChart3 className="w-10 h-10 text-indigo-400" />
                  </div>
-                 <h2 className="text-2xl font-bold text-white mb-2">Campaign Intelligence</h2>
+                 <h2 className="text-2xl font-bold text-white mb-2 text-white">Campaign Intelligence</h2>
                  <p className="text-slate-500 text-sm leading-relaxed mb-8">
-                    Open tracking is active! Once your campaign starts receiving opens, your engagement data will appear here.
+                    Open tracking is active!
                  </p>
-                 <div className="grid grid-cols-2 gap-4">
-                    <div className="p-6 bg-slate-950 rounded-2xl border border-slate-900">
-                       <div className="text-slate-600 text-[10px] uppercase font-bold tracking-widest mb-1">Avg. Opens</div>
-                       <div className="text-3xl font-black text-indigo-500">--%</div>
-                    </div>
-                    <div className="p-6 bg-slate-950 rounded-2xl border border-slate-900">
-                       <div className="text-slate-600 text-[10px] uppercase font-bold tracking-widest mb-1">Total Sends</div>
-                       <div className="text-3xl font-black text-slate-400">0</div>
-                    </div>
-                 </div>
               </div>
             </div>
           )}
-
         </div>
       </main>
     </div>
