@@ -141,7 +141,7 @@ app.get('/api/auth/callback', async (req, res) => {
     `);
   } catch (err) {
     console.error('Auth callback error:', err);
-    res.status(500).send(\`Auth Error: \${err.message}\`);
+    res.status(500).send('Auth Error: ' + err.message);
   }
 });
 
