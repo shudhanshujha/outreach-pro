@@ -21,14 +21,23 @@ app.get('/', (req, res) => {
 
 // --- ONE-CLICK OAUTH FLOW ---
 
-const oauth2Client = new google.auth.OAuth2(
-  process.env.GOOGLE_CLIENT_ID,
-  process.env.GOOGLE_CLIENT_SECRET,
-  `${BASE_URL}/api/auth/callback`
-);
+const getOAuth2Client = (req) => {
+  const protocol = req.headers['x-forwarded-proto'] || req.protocol;
+  const host = req.get('host');
+  const redirectUri = process.env.BACKEND_URL 
+    ? `${process.env.BACKEND_URL}/api/auth/callback`
+    : `${protocol}://${host}/api/auth/callback`;
+  
+  return new google.auth.OAuth2(
+    process.env.GOOGLE_CLIENT_ID,
+    process.env.GOOGLE_CLIENT_SECRET,
+    redirectUri
+  );
+};
 
 app.get('/api/auth/google', (req, res) => {
-  const url = oauth2Client.generateAuthUrl({
+  const client = getOAuth2Client(req);
+  const url = client.generateAuthUrl({
     access_type: 'offline',
     prompt: 'consent',
     scope: ['https://mail.google.com/', 'https://www.googleapis.com/auth/userinfo.email']
@@ -39,10 +48,11 @@ app.get('/api/auth/google', (req, res) => {
 app.get('/api/auth/callback', async (req, res) => {
   const { code } = req.query;
   try {
-    const { tokens } = await oauth2Client.getToken(code);
+    const client = getOAuth2Client(req);
+    const { tokens } = await client.getToken(code);
     
     // Get user email
-    const ticket = await oauth2Client.verifyIdToken({
+    const ticket = await client.verifyIdToken({
       idToken: tokens.id_token,
       audience: process.env.GOOGLE_CLIENT_ID
     });

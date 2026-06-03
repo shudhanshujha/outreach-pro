@@ -1,7 +1,8 @@
 const Database = require('better-sqlite3');
 const path = require('path');
 
-const db = new Database(path.join(__dirname, 'outreach.db'));
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'outreach.db');
+const db = new Database(dbPath);
 
 // Initialize Schema
 db.exec(`
@@ -18,15 +19,38 @@ db.exec(`
 const tableInfo = db.prepare("PRAGMA table_info(accounts)").all();
 const columns = tableInfo.map(c => c.name);
 
+let migrated = false;
 if (!columns.includes('clientId')) {
-  try { db.exec("ALTER TABLE accounts ADD COLUMN clientId TEXT"); } catch(e) {}
+  try {
+    db.exec("ALTER TABLE accounts ADD COLUMN clientId TEXT");
+    console.log("Database Migration: Added clientId column to accounts table.");
+    migrated = true;
+  } catch(e) {
+    console.error("Migration Error adding clientId:", e);
+  }
 }
 if (!columns.includes('clientSecret')) {
-  try { db.exec("ALTER TABLE accounts ADD COLUMN clientSecret TEXT"); } catch(e) {}
+  try {
+    db.exec("ALTER TABLE accounts ADD COLUMN clientSecret TEXT");
+    console.log("Database Migration: Added clientSecret column to accounts table.");
+    migrated = true;
+  } catch(e) {
+    console.error("Migration Error adding clientSecret:", e);
+  }
 }
 if (!columns.includes('refreshToken')) {
-  try { db.exec("ALTER TABLE accounts ADD COLUMN refreshToken TEXT"); } catch(e) {}
+  try {
+    db.exec("ALTER TABLE accounts ADD COLUMN refreshToken TEXT");
+    console.log("Database Migration: Added refreshToken column to accounts table.");
+    migrated = true;
+  } catch(e) {
+    console.error("Migration Error adding refreshToken:", e);
+  }
 }
+if (migrated) {
+  console.log("Database migrations completed successfully.");
+}
+
 
 db.exec(`
   CREATE TABLE IF NOT EXISTS recipients (
