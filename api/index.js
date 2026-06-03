@@ -6,9 +6,12 @@ const db = require('./db');
 const { ImapFlow } = require('imapflow');
 const { google } = require('googleapis');
 const dns = require('dns');
+const dnsPromises = dns.promises;
 
 // ✅ Force IPv4 globally — prevents ENETUNREACH on Render (IPv6 not supported)
-dns.setDefaultResultOrder('ipv4first');
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
 
 const app = express();
 app.use(cors());
@@ -23,8 +26,20 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 // HELPERS
 // ============================================================
 
-/** Create a nodemailer transporter forced to IPv4 via port 587 (STARTTLS) */
+/** Create a nodemailer transporter forced to IPv4 via manual DNS resolution */
 async function createTransporter(account, userEmail) {
+  // Manually resolve to IPv4 address to force the connection over IPv4
+  let smtpIp = 'smtp.gmail.com';
+  try {
+    const addresses = await dnsPromises.resolve4('smtp.gmail.com');
+    if (addresses && addresses.length > 0) {
+      smtpIp = addresses[0];
+      console.log(`Resolved smtp.gmail.com to IPv4: ${smtpIp}`);
+    }
+  } catch (dnsErr) {
+    console.warn('DNS Resolution failed, falling back to hostname:', dnsErr.message);
+  }
+
   const oAuth2Client = new google.auth.OAuth2(
     account.clientId,
     account.clientSecret,
@@ -41,15 +56,15 @@ async function createTransporter(account, userEmail) {
   });
 
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
+    host: smtpIp, // Use the IPv4 address directly
     port: 587,
-    secure: false,          // STARTTLS — works on Render (IPv4), port 465 often does NOT
+    secure: false, // STARTTLS
     requireTLS: true,
-    connectionTimeout: 10000,
-    greetingTimeout: 10000,
-    socketTimeout: 10000,
-    dns_update: true,
-    family: 4,              // Explicitly force IPv4 to fix ENETUNREACH
+    family: 4,     // Force IPv4
+    tls: {
+      servername: 'smtp.gmail.com', // Required because we are using an IP address for host
+      rejectUnauthorized: false     // Often needed on cloud environments with proxy layers
+    },
     auth: {
       type: 'OAuth2',
       user: userEmail,
@@ -126,7 +141,7 @@ app.get('/api/auth/callback', async (req, res) => {
     `);
   } catch (err) {
     console.error('Auth callback error:', err);
-    res.status(500).send(\`Auth Error: \${err.message}\`);
+    res.status(500).send(`Auth Error: ${err.message}`);
   }
 });
 
@@ -163,7 +178,7 @@ app.get('/api/t/:id.png', (req, res) => {
         db.prepare('INSERT OR IGNORE INTO scheduled_emails (id, campaign_id, recipient_email, account_email, subject, body, scheduled_at) VALUES (?, ?, ?, ?, ?, ?, ?)')
           .run(uuidv4(), emailData.campaign_id, emailData.recipient_email, emailData.account_email, fu.subject, fu.body, scheduledTime.toISOString());
       }
-      console.log(\`Tracking: Email \${req.params.id} opened. \${followUps.length} follow-ups scheduled.\`);
+      console.log(`Tracking: Email ${req.params.id} opened. ${followUps.length} follow-ups scheduled.`);
     }
   } catch (err) { console.error('Tracking error:', err); }
 
@@ -195,7 +210,7 @@ async function runBackgroundWorker() {
     const pending = db.prepare('SELECT * FROM scheduled_emails WHERE status = "pending" AND scheduled_at <= ?').all(now);
     
     if (pending.length > 0) {
-      console.log(\`Worker: Sending \${pending.length} follow-ups\`);
+      console.log(`Worker: Sending ${pending.length} follow-ups`);
     }
 
     for (const email of pending) {
@@ -210,13 +225,13 @@ async function runBackgroundWorker() {
           to: email.recipient_email,
           subject: email.subject,
           html: email.body +
-            `<img src="\${BASE_URL}/api/t/\${sentId}.png" width="1" height="1" style="display:none" />` +
-            `<div style="margin-top:40px;font-size:11px;color:#999"><a href="\${BASE_URL}/api/unsubscribe/\${email.recipient_email}">Unsubscribe</a></div>`
+            `<img src="${BASE_URL}/api/t/${sentId}.png" width="1" height="1" style="display:none" />` +
+            `<div style="margin-top:40px;font-size:11px;color:#999"><a href="${BASE_URL}/api/unsubscribe/${email.recipient_email}">Unsubscribe</a></div>`
         });
         db.prepare('UPDATE scheduled_emails SET status = "sent" WHERE id = ?').run(email.id);
         db.prepare('INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES (?, ?, ?, ?, "sent")')
           .run(sentId, email.campaign_id, email.recipient_email, email.account_email);
-      } catch (err) { console.error(\`Follow-up failed (\${email.recipient_email}):\`, err.message); }
+      } catch (err) { console.error(`Follow-up failed (${email.recipient_email}):`, err.message); }
     }
   } catch (err) { console.error('Worker error:', err); }
 }
@@ -261,7 +276,7 @@ app.post('/api/send', async (req, res) => {
         const recipient = recipients[i];
         const isUnsubbed = db.prepare('SELECT unsubscribed FROM recipients WHERE email = ?').get(recipient.email);
         if (isUnsubbed?.unsubscribed) {
-          activeLogs.push({ text: \`Skipping \${recipient.email} (Unsubscribed)\`, type: 'info', timestamp: new Date() });
+          activeLogs.push({ text: `Skipping ${recipient.email} (Unsubscribed)`, type: 'info', timestamp: new Date() });
           continue;
         }
 
@@ -269,11 +284,11 @@ app.post('/api/send', async (req, res) => {
         const account = db.prepare('SELECT * FROM accounts WHERE email = ?').get(accEmail);
 
         if (!account) {
-          activeLogs.push({ text: \`✗ Account \${accEmail} not found\`, type: 'error', timestamp: new Date() });
+          activeLogs.push({ text: `✗ Account ${accEmail} not found`, type: 'error', timestamp: new Date() });
           continue;
         }
 
-        activeLogs.push({ text: \`[\${i+1}/\${recipients.length}] Sending to \${recipient.email} via \${accEmail}...\`, timestamp: new Date() });
+        activeLogs.push({ text: `[${i+1}/${recipients.length}] Sending to ${recipient.email} via ${accEmail}...`, timestamp: new Date() });
 
         try {
           const transporter = await createTransporter(account, accEmail);
@@ -282,18 +297,18 @@ app.post('/api/send', async (req, res) => {
           // Replace placeholders
           const pSubject = subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const pBody = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '') +
-            `<img src="\${BASE_URL}/api/t/\${sentId}.png" width="1" height="1" style="display:none" />` +
-            `<div style="margin-top:40px;font-size:11px;color:#999"><a href="\${BASE_URL}/api/unsubscribe/\${recipient.email}">Unsubscribe</a></div>`;
+            `<img src="${BASE_URL}/api/t/${sentId}.png" width="1" height="1" style="display:none" />` +
+            `<div style="margin-top:40px;font-size:11px;color:#999"><a href="${BASE_URL}/api/unsubscribe/${recipient.email}">Unsubscribe</a></div>`;
 
           await transporter.sendMail({ from: accEmail, to: recipient.email, subject: pSubject, html: pBody });
           
           db.prepare('INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES (?, ?, ?, ?, "sent")')
             .run(sentId, campaignId, recipient.email, accEmail);
           
-          activeLogs.push({ text: \`✓ Successfully sent to \${recipient.email}\`, type: 'success', timestamp: new Date() });
+          activeLogs.push({ text: `✓ Successfully sent to ${recipient.email}`, type: 'success', timestamp: new Date() });
         } catch (err) {
-          activeLogs.push({ text: \`✗ Network Error (\${recipient.email}): \${err.message}\`, type: 'error', timestamp: new Date() });
-          console.error(\`Send error for \${recipient.email}:\`, err);
+          activeLogs.push({ text: `✗ Network Error (${recipient.email}): ${err.message}`, type: 'error', timestamp: new Date() });
+          console.error(`Send error for ${recipient.email}:`, err);
         }
 
         if (!activeStop && i < recipients.length - 1) {
@@ -304,7 +319,7 @@ app.post('/api/send', async (req, res) => {
 
       activeStatus = activeStop ? 'stopped' : 'completed';
       db.prepare('UPDATE campaigns SET status = ? WHERE id = ?').run(activeStatus, campaignId);
-      console.log(\`Campaign \${campaignId} \${activeStatus}.\`);
+      console.log(`Campaign ${campaignId} ${activeStatus}.`);
     } catch (err) {
       console.error('Campaign error:', err);
       activeStatus = 'idle';
@@ -322,7 +337,7 @@ app.post('/api/stop', (req, res) => {
 app.get('/api/logs', (req, res) => res.json({ logs: activeLogs, status: activeStatus }));
 
 if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => console.log(\`OutreachPro backend running on port \${PORT}\`));
+  app.listen(PORT, () => console.log(`OutreachPro backend running on port ${PORT}`));
 }
 
 module.exports = app;
