@@ -140,6 +140,7 @@ async function runBackgroundWorker() {
 
         const transporter = nodemailer.createTransport({
           service: 'gmail',
+          family: 4,
           auth: {
             type: 'OAuth2',
             user: email.account_email,
@@ -214,6 +215,7 @@ app.post('/api/send', async (req, res) => {
 
           const transporter = nodemailer.createTransport({
             service: 'gmail',
+            family: 4,
             auth: {
               type: 'OAuth2',
               user: accEmail,
