@@ -12,7 +12,23 @@ db.exec(`
     clientSecret TEXT,
     refreshToken TEXT
   );
+`);
 
+// Migration: Ensure columns exist (Render might have an old DB file)
+const tableInfo = db.prepare("PRAGMA table_info(accounts)").all();
+const columns = tableInfo.map(c => c.name);
+
+if (!columns.includes('clientId')) {
+  try { db.exec("ALTER TABLE accounts ADD COLUMN clientId TEXT"); } catch(e) {}
+}
+if (!columns.includes('clientSecret')) {
+  try { db.exec("ALTER TABLE accounts ADD COLUMN clientSecret TEXT"); } catch(e) {}
+}
+if (!columns.includes('refreshToken')) {
+  try { db.exec("ALTER TABLE accounts ADD COLUMN refreshToken TEXT"); } catch(e) {}
+}
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS recipients (
     id TEXT PRIMARY KEY,
     email TEXT,

@@ -225,4 +225,8 @@ app.post('/api/send', async (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json({ logs: activeLogs, status: activeStatus }));
 
-app.listen(PORT, () => console.log(`Backend Pro running on ${PORT}`));
+if (process.env.NODE_ENV !== 'production') {
+  app.listen(PORT, () => console.log(`Backend Pro running on ${PORT}`));
+}
+
+module.exports = app;

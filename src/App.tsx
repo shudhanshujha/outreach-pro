@@ -5,6 +5,9 @@ import {
   FileText, Sparkles, Loader2, BarChart3, 
   Inbox, ListTree, Clock, ExternalLink, CheckCircle2
 } from 'lucide-react';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import PrivacyPolicy from './PrivacyPolicy';
+import TermsOfService from './TermsOfService';
 
 // --- TYPES ---
 interface Account { email: string; }
@@ -14,7 +17,7 @@ interface FollowUp { delayDays: number; subject: string; body: string; }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
-const App: React.FC = () => {
+const Dashboard: React.FC = () => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
   const [connectedAccounts, setConnectedAccounts] = useState<Account[]>([]);
@@ -65,7 +68,6 @@ const App: React.FC = () => {
 
   const handleConnectAccount = () => {
     window.open(`${API_BASE_URL}/api/auth/google`, 'Connect Gmail', 'width=600,height=700');
-    // Poll for new accounts every 3 seconds for a bit
     const poll = setInterval(fetchConnectedAccounts, 3000);
     setTimeout(() => clearInterval(poll), 30000);
   };
@@ -88,8 +90,6 @@ const App: React.FC = () => {
       return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
     });
     try {
-      // In one-click mode, backend already has the tokens in DB
-      // We just pass the emails we want to use
       await axios.post(`${API_BASE_URL}/api/send`, { 
         accounts: connectedAccounts.map(a => ({ user: a.email })), 
         recipients, 
@@ -114,7 +114,6 @@ const App: React.FC = () => {
     if (connectedAccounts.length === 0) return alert('Connect an account first');
     setLoadingInbox(true);
     try {
-      // Fetch from the first connected account
       const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: { user: connectedAccounts[0].email } });
       setReplies(res.data.messages);
     } catch (err) { alert('Failed to fetch inbox'); }
@@ -125,10 +124,12 @@ const App: React.FC = () => {
     <div className="min-h-screen bg-[#070708] text-slate-300 font-sans">
       <aside className="fixed left-0 top-0 bottom-0 w-20 md:w-64 bg-[#0d0d0f] border-r border-slate-800/50 z-50 flex flex-col">
         <div className="p-6 flex items-center gap-3 border-b border-slate-800/50">
-          <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/20">
-            <Send className="w-5 h-5 text-white" />
-          </div>
-          <span className="hidden md:block font-bold text-lg text-white tracking-tight">Outreach<span className="text-indigo-500">Pro</span></span>
+          <Link to="/" className="flex items-center gap-3">
+            <div className="p-2 bg-indigo-600 rounded-lg shadow-lg shadow-indigo-500/20">
+              <Send className="w-5 h-5 text-white" />
+            </div>
+            <span className="hidden md:block font-bold text-lg text-white tracking-tight">Outreach<span className="text-indigo-500">Pro</span></span>
+          </Link>
         </div>
         <nav className="flex-1 p-4 space-y-2 mt-4">
           <button onClick={() => setActiveTab('campaign')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'campaign' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
@@ -144,7 +145,11 @@ const App: React.FC = () => {
             <span className="hidden md:block font-medium">Analytics</span>
           </button>
         </nav>
-        <div className="p-4 border-t border-slate-800/50">
+        <div className="p-4 border-t border-slate-800/50 space-y-4">
+           <div className="space-y-1">
+             <Link to="/privacy" className="block text-[10px] text-slate-600 hover:text-slate-400 uppercase font-bold tracking-widest">Privacy Policy</Link>
+             <Link to="/terms" className="block text-[10px] text-slate-600 hover:text-slate-400 uppercase font-bold tracking-widest">Terms of Service</Link>
+           </div>
            <div className="flex items-center gap-3 px-3 py-2 bg-slate-900/50 rounded-xl">
               <div className={`w-2 h-2 rounded-full ${status === 'running' ? 'bg-indigo-500 animate-pulse' : 'bg-slate-600'}`} />
               <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">{status}</span>
@@ -157,26 +162,46 @@ const App: React.FC = () => {
           {activeTab === 'campaign' && (
             <div className="grid grid-cols-1 xl:grid-cols-12 gap-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="xl:col-span-7 space-y-8">
-                {/* SMTP Config */}
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <div className="flex justify-between items-center mb-6">
-                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                      <Settings className="w-4 h-4" /> Connected Gmail Accounts
-                    </h2>
+                    <div>
+                      <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                        <Settings className="w-4 h-4" /> Gmail Rotation (Goal: 5+)
+                      </h2>
+                      <p className="text-[10px] text-slate-500 mt-1">Rotating accounts improves deliverability and avoids spam filters.</p>
+                    </div>
                     <button onClick={handleConnectAccount} className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20">
-                      <ExternalLink className="w-3.5 h-3.5" /> 🔗 Connect New Account
+                      <ExternalLink className="w-3.5 h-3.5" /> 🔗 Connect
                     </button>
+                  </div>
+
+                  <div className="mb-6">
+                    <div className="flex justify-between text-[10px] font-bold uppercase mb-2">
+                      <span className={connectedAccounts.length >= 5 ? 'text-emerald-400' : 'text-indigo-400'}>
+                        {connectedAccounts.length} / 5 Accounts Connected
+                      </span>
+                      <span className="text-slate-600">{Math.min(100, (connectedAccounts.length / 5) * 100)}%</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                      <div 
+                        className={`h-full transition-all duration-500 ${connectedAccounts.length >= 5 ? 'bg-emerald-500' : 'bg-indigo-500'}`} 
+                        style={{ width: `${Math.min(100, (connectedAccounts.length / 5) * 100)}%` }} 
+                      />
+                    </div>
                   </div>
                   
                   <div className="space-y-3">
-                    {connectedAccounts.length === 0 && <div className="text-slate-600 text-sm italic p-4 text-center border border-dashed border-slate-800 rounded-xl">No accounts connected yet. Click the button above to link your Gmails.</div>}
+                    {connectedAccounts.length === 0 && <div className="text-slate-600 text-sm italic p-4 text-center border border-dashed border-slate-800 rounded-xl">No accounts connected yet. Click "Connect" to link your first Gmail.</div>}
                     {connectedAccounts.map((acc, idx) => (
                       <div key={idx} className="flex items-center justify-between p-4 bg-slate-950 rounded-xl border border-slate-800/50 group">
                         <div className="flex items-center gap-3">
                            <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center"><Mail className="w-4 h-4 text-indigo-400" /></div>
                            <span className="text-sm font-medium text-slate-200">{acc.email}</span>
                         </div>
-                        <CheckCircle2 className="w-4 h-4 text-emerald-500 opacity-50" />
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-bold text-emerald-500/50 uppercase">Active</span>
+                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        </div>
                       </div>
                     ))}
                   </div>
@@ -316,6 +341,18 @@ const App: React.FC = () => {
         </div>
       </main>
     </div>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <Router>
+      <Routes>
+        <Route path="/" element={<Dashboard />} />
+        <Route path="/privacy" element={<PrivacyPolicy />} />
+        <Route path="/terms" element={<TermsOfService />} />
+      </Routes>
+    </Router>
   );
 };
 
