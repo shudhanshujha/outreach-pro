@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
-  Inbox, ListTree, Clock, ExternalLink, CheckCircle2, Trash2
+  Inbox, ListTree, Clock, ExternalLink, CheckCircle2, Trash2, Square
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -17,10 +17,15 @@ interface FollowUp { delayDays: number; subject: string; body: string; }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
+const CACHE_KEY = 'outreach_accounts_cache';
+
 const Dashboard: React.FC = () => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox'>('campaign');
-  const [connectedAccounts, setConnectedAccounts] = useState<Account[]>([]);
+  // ✅ Load accounts from localStorage cache on startup (survives page refresh)
+  const [connectedAccounts, setConnectedAccounts] = useState<Account[]>(() => {
+    try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); } catch { return []; }
+  });
   const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
   const [body, setBody] = useState('<p>Hi {{name}},</p>\n<p>I noticed your business, {{business}}, and wanted to reach out regarding a potential collaboration.</p>\n<p>Best regards,<br>Your Name</p>');
@@ -63,7 +68,12 @@ const Dashboard: React.FC = () => {
     try {
       const res = await axios.get(`${API_BASE_URL}/api/accounts`);
       setConnectedAccounts(res.data.accounts);
-    } catch (err) { console.error('Failed to load accounts'); }
+      // ✅ Persist to localStorage so accounts survive page refresh
+      localStorage.setItem(CACHE_KEY, JSON.stringify(res.data.accounts));
+    } catch (err) {
+      console.error('Failed to load accounts — using cached data');
+      // Keep showing cached accounts if backend is temporarily unreachable
+    }
   };
 
   const handleConnectAccount = () => {
@@ -76,8 +86,19 @@ const Dashboard: React.FC = () => {
     if (!confirm(`Are you sure you want to remove ${email}?`)) return;
     try {
       await axios.delete(`${API_BASE_URL}/api/accounts/${email}`);
-      fetchConnectedAccounts();
+      // Also remove from local cache immediately
+      const updated = connectedAccounts.filter(a => a.email !== email);
+      setConnectedAccounts(updated);
+      localStorage.setItem(CACHE_KEY, JSON.stringify(updated));
     } catch (err) { alert('Failed to remove account'); }
+  };
+
+  // ✅ Stop running campaign
+  const handleStop = async () => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/stop`);
+      setStatus('idle');
+    } catch (err) { alert('Failed to stop campaign'); }
   };
 
   const handleEnrich = async () => {
@@ -278,9 +299,20 @@ const Dashboard: React.FC = () => {
                         <input type="number" value={delayMax} onChange={e => setDelayMax(Number(e.target.value))} className="bg-transparent text-xl font-bold outline-none w-full text-white" />
                       </div>
                     </div>
-                    <button onClick={handleStart} disabled={status === 'running' || connectedAccounts.length === 0} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
-                      {status === 'running' ? 'Campaign Active...' : 'Start Now'}
-                    </button>
+                    <div className="space-y-3">
+                      <button onClick={handleStart} disabled={status === 'running' || connectedAccounts.length === 0} className="w-full bg-white text-indigo-600 font-bold py-4 rounded-2xl shadow-xl hover:scale-[1.02] active:scale-[0.98] transition-all disabled:opacity-50">
+                        {status === 'running' ? (
+                          <span className="flex items-center justify-center gap-2">
+                            <Loader2 className="w-4 h-4 animate-spin" /> Campaign Active...
+                          </span>
+                        ) : 'Start Now'}
+                      </button>
+                      {status === 'running' && (
+                        <button onClick={handleStop} className="w-full bg-rose-500/20 text-rose-300 border border-rose-500/30 font-bold py-3 rounded-2xl hover:bg-rose-500/30 transition-all flex items-center justify-center gap-2">
+                          <Square className="w-4 h-4" /> Stop Campaign
+                        </button>
+                      )}
+                    </div>
                   </section>
 
                   <section className="bg-[#111113] rounded-2xl border border-slate-800/40 shadow-sm overflow-hidden flex flex-col h-[400px]">
