@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
-  Inbox, ListTree, Clock, ExternalLink, CheckCircle2
+  Inbox, ListTree, Clock, ExternalLink, CheckCircle2, Trash2
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -70,6 +70,14 @@ const Dashboard: React.FC = () => {
     window.open(`${API_BASE_URL}/api/auth/google`, 'Connect Gmail', 'width=600,height=700');
     const poll = setInterval(fetchConnectedAccounts, 3000);
     setTimeout(() => clearInterval(poll), 30000);
+  };
+
+  const handleRemoveAccount = async (email: string) => {
+    if (!confirm(`Are you sure you want to remove ${email}?`)) return;
+    try {
+      await axios.delete(`${API_BASE_URL}/api/accounts/${email}`);
+      fetchConnectedAccounts();
+    } catch (err) { alert('Failed to remove account'); }
   };
 
   const handleEnrich = async () => {
@@ -198,9 +206,18 @@ const Dashboard: React.FC = () => {
                            <div className="w-8 h-8 rounded-full bg-indigo-500/10 flex items-center justify-center"><Mail className="w-4 h-4 text-indigo-400" /></div>
                            <span className="text-sm font-medium text-slate-200">{acc.email}</span>
                         </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-[10px] font-bold text-emerald-500/50 uppercase">Active</span>
-                          <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                        <div className="flex items-center gap-4">
+                          <div className="flex items-center gap-2">
+                            <span className="text-[10px] font-bold text-emerald-500/50 uppercase">Active</span>
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500" />
+                          </div>
+                          <button 
+                            onClick={() => handleRemoveAccount(acc.email)}
+                            className="p-2 text-slate-600 hover:text-rose-500 hover:bg-rose-500/10 rounded-lg transition-all"
+                            title="Remove Account"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
                         </div>
                       </div>
                     ))}

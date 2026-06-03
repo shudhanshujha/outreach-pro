@@ -73,6 +73,16 @@ app.get('/api/accounts', (req, res) => {
   res.json({ accounts });
 });
 
+app.delete('/api/accounts/:email', (req, res) => {
+  const email = req.params.email;
+  try {
+    db.prepare('DELETE FROM accounts WHERE email = ?').run(email);
+    res.json({ success: true, message: `Account ${email} removed.` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // 1. OPEN TRACKING PIXEL
 app.get('/api/t/:id.png', (req, res) => {
   const id = req.params.id;
