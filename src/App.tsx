@@ -56,7 +56,7 @@ const Dashboard: React.FC = () => {
     return () => clearInterval(interval);
   }, [status]);
 
-  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
+  // useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIONS ---
   const fetchConnectedAccounts = async () => {

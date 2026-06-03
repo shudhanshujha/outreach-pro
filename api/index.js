@@ -5,7 +5,13 @@ const { v4: uuidv4 } = require('uuid');
 const db = require('./db');
 const { ImapFlow } = require('imapflow');
 const { google } = require('googleapis');
+const dns = require('dns');
 const app = express();
+
+// Force IPv4 to avoid ENETUNREACH errors on platforms like Render
+if (dns.setDefaultResultOrder) {
+  dns.setDefaultResultOrder('ipv4first');
+}
 
 app.use(cors());
 app.use(express.json());
