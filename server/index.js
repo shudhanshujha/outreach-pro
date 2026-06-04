@@ -290,8 +290,6 @@ app.post('/api/stop', (req, res) => {
 
 app.get('/api/logs', (req, res) => res.json({ logs: activeLogs, status: activeStatus }));
 
-if (process.env.NODE_ENV !== 'production') {
-  app.listen(PORT, () => console.log('Backend running on port ' + PORT));
-}
+app.listen(PORT, () => console.log('Backend running on port ' + PORT));
 
 module.exports = app;
