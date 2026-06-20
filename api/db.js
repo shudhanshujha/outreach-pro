@@ -16,38 +16,14 @@ db.exec(`
 `);
 
 // Migration: Ensure columns exist (Render might have an old DB file)
-console.log("Database: Checking 'accounts' table schema...");
 const tableInfo = db.prepare("PRAGMA table_info(accounts)").all();
 const columns = tableInfo.map(c => c.name);
-console.log("Current columns in 'accounts':", columns.join(", "));
 
-let migrated = false;
-if (!columns.includes('clientId')) {
+if (!columns.includes('appPassword')) {
   try {
-    db.exec("ALTER TABLE accounts ADD COLUMN clientId TEXT");
-    console.log("Database Migration: Successfully added 'clientId' column.");
-    migrated = true;
-  } catch(e) { console.error("Migration Error (clientId):", e.message); }
-}
-if (!columns.includes('clientSecret')) {
-  try {
-    db.exec("ALTER TABLE accounts ADD COLUMN clientSecret TEXT");
-    console.log("Database Migration: Successfully added 'clientSecret' column.");
-    migrated = true;
-  } catch(e) { console.error("Migration Error (clientSecret):", e.message); }
-}
-if (!columns.includes('refreshToken')) {
-  try {
-    db.exec("ALTER TABLE accounts ADD COLUMN refreshToken TEXT");
-    console.log("Database Migration: Successfully added 'refreshToken' column.");
-    migrated = true;
-  } catch(e) { console.error("Migration Error (refreshToken):", e.message); }
-}
-
-if (migrated) {
-  console.log("Database migrations completed.");
-} else {
-  console.log("No database migrations needed.");
+    db.exec("ALTER TABLE accounts ADD COLUMN appPassword TEXT");
+    console.log("Added 'appPassword' column to accounts.");
+  } catch(e) { console.error("Migration Error (appPassword):", e.message); }
 }
 
 

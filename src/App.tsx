@@ -3,7 +3,7 @@ import axios from 'axios';
 import { 
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
-  Inbox, ListTree, Clock, ExternalLink, CheckCircle2, Trash2, Square
+  Inbox, ListTree, Clock, KeyRound, CheckCircle2, Trash2, Square, Plus, X
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -26,7 +26,7 @@ const Dashboard: React.FC = () => {
   const [connectedAccounts, setConnectedAccounts] = useState<Account[]>(() => {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); } catch { return []; }
   });
-  const [recipientText, setRecipientText] = useState('jhash0099@gmail.com,John Doe,Example Corp\njhash0099@gmail.com,Jane Smith,Test LLC');
+  const [recipientText, setRecipientText] = useState('email,name,business');
   const [subject, setSubject] = useState('Hello {{name}} from {{business}}');
   const [body, setBody] = useState('<p>Hi {{name}},</p>\n<p>I noticed your business, {{business}}, and wanted to reach out regarding a potential collaboration.</p>\n<p>Best regards,<br>Your Name</p>');
   const [followUps, setFollowUps] = useState<FollowUp[]>([
@@ -42,6 +42,9 @@ const Dashboard: React.FC = () => {
   const [isEnriching, setIsEnriching] = useState(false);
   const [replies, setReplies] = useState<EmailReply[]>([]);
   const [loadingInbox, setLoadingInbox] = useState(false);
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [newEmail, setNewEmail] = useState('');
+  const [newAppPassword, setNewAppPassword] = useState('');
 
   const logEndRef = useRef<HTMLDivElement>(null);
 
@@ -76,10 +79,17 @@ const Dashboard: React.FC = () => {
     }
   };
 
-  const handleConnectAccount = () => {
-    window.open(`${API_BASE_URL}/api/auth/google`, 'Connect Gmail', 'width=600,height=700');
-    const poll = setInterval(fetchConnectedAccounts, 3000);
-    setTimeout(() => clearInterval(poll), 30000);
+  const handleAddAccount = async () => {
+    if (!newEmail || !newAppPassword) return alert('Enter both email and app password.');
+    try {
+      await axios.post(`${API_BASE_URL}/api/accounts`, { email: newEmail, appPassword: newAppPassword });
+      setNewEmail('');
+      setNewAppPassword('');
+      setShowAddForm(false);
+      fetchConnectedAccounts();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to add account');
+    }
   };
 
   const handleRemoveAccount = async (email: string) => {
@@ -107,8 +117,14 @@ const Dashboard: React.FC = () => {
     setIsEnriching(true);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/enrich`, { emails });
-      setRecipientText(res.data.enrichedData.map((i: any) => `${i.email}, ${i.name}, ${i.business}`).join('\n'));
-    } catch (err) { alert('Enrichment failed. Check Hunter API Key.'); }
+      if (res.data.enrichedData) {
+        setRecipientText(res.data.enrichedData.map((i: any) => `${i.email}, ${i.name}, ${i.business}`).join('\n'));
+      } else {
+        alert(res.data.error || 'Enrichment unavailable');
+      }
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Enrichment failed');
+    }
     finally { setIsEnriching(false); }
   };
 
@@ -197,12 +213,42 @@ const Dashboard: React.FC = () => {
                       <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                         <Settings className="w-4 h-4" /> Gmail Rotation (Goal: 5+)
                       </h2>
-                      <p className="text-[10px] text-slate-500 mt-1">Rotating accounts improves deliverability and avoids spam filters.</p>
+                      <p className="text-[10px] text-slate-500 mt-1">Add Gmail accounts using App Passwords (requires 2FA enabled).</p>
                     </div>
-                    <button onClick={handleConnectAccount} className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20">
-                      <ExternalLink className="w-3.5 h-3.5" /> 🔗 Connect
+                    <button onClick={() => setShowAddForm(true)} className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20">
+                      <Plus className="w-3.5 h-3.5" /> Add Account
                     </button>
                   </div>
+
+                  {showAddForm && (
+                    <div className="mb-6 p-4 bg-indigo-500/5 border border-indigo-500/20 rounded-xl space-y-3">
+                      <div className="flex justify-between items-center">
+                        <span className="text-xs font-bold text-indigo-400 uppercase tracking-widest">New Gmail Account</span>
+                        <button onClick={() => setShowAddForm(false)} className="text-slate-500 hover:text-slate-300">
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                      <input
+                        placeholder="Gmail address"
+                        value={newEmail}
+                        onChange={e => setNewEmail(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
+                      />
+                      <div>
+                        <input
+                          type="password"
+                          placeholder="App Password (get from myaccount.google.com/apppasswords)"
+                          value={newAppPassword}
+                          onChange={e => setNewAppPassword(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
+                        />
+                        <p className="text-[10px] text-slate-600 mt-1">Enable 2FA, then visit <span className="text-indigo-400">myaccount.google.com/apppasswords</span> to generate one.</p>
+                      </div>
+                      <button onClick={handleAddAccount} className="w-full bg-indigo-600 text-white text-sm font-bold py-2 rounded-lg hover:bg-indigo-500 transition-all flex items-center justify-center gap-2">
+                        <KeyRound className="w-3.5 h-3.5" /> Save Account
+                      </button>
+                    </div>
+                  )}
 
                   <div className="mb-6">
                     <div className="flex justify-between text-[10px] font-bold uppercase mb-2">
@@ -220,7 +266,7 @@ const Dashboard: React.FC = () => {
                   </div>
                   
                   <div className="space-y-3">
-                    {connectedAccounts.length === 0 && <div className="text-slate-600 text-sm italic p-4 text-center border border-dashed border-slate-800 rounded-xl">No accounts connected yet. Click "Connect" to link your first Gmail.</div>}
+                    {connectedAccounts.length === 0 && <div className="text-slate-600 text-sm italic p-4 text-center border border-dashed border-slate-800 rounded-xl">No accounts added yet. Click "Add Account" to add your first Gmail with an app password.</div>}
                     {connectedAccounts.map((acc, idx) => (
                       <div key={idx} className="flex items-center justify-between p-4 bg-slate-950 rounded-xl border border-slate-800/50 group">
                         <div className="flex items-center gap-3">
