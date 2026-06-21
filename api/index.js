@@ -16,6 +16,14 @@ const PORT = process.env.PORT || 3001;
 const BASE_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
+let brevoKey = process.env.BREVO_SMTP_KEY;
+(async () => {
+  if (!brevoKey) {
+    const { data } = await supabase.from('app_settings').select('value').eq('key', 'BREVO_SMTP_KEY').maybeSingle();
+    if (data?.value) brevoKey = data.value;
+  }
+})();
+
 function createTransporter(account) {
   return nodemailer.createTransport({
     host: 'smtp-relay.brevo.com',
@@ -23,7 +31,7 @@ function createTransporter(account) {
     secure: false,
     auth: {
       user: account.email,
-      pass: process.env.BREVO_SMTP_KEY
+      pass: brevoKey
     }
   });
 }
