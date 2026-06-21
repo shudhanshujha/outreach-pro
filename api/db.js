@@ -1,81 +1,76 @@
-const Database = require('better-sqlite3');
-const path = require('path');
+const { Pool } = require('pg');
 
-const dbPath = process.env.DATABASE_PATH || path.join(__dirname, 'outreach.db');
-const db = new Database(dbPath);
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
+});
 
-// Initialize Schema
-db.exec(`
-  CREATE TABLE IF NOT EXISTS accounts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    email TEXT UNIQUE,
-    clientId TEXT,
-    clientSecret TEXT,
-    refreshToken TEXT
-  );
-`);
-
-// Migration: Ensure columns exist (Render might have an old DB file)
-const tableInfo = db.prepare("PRAGMA table_info(accounts)").all();
-const columns = tableInfo.map(c => c.name);
-
-if (!columns.includes('appPassword')) {
+async function initDB() {
   try {
-    db.exec("ALTER TABLE accounts ADD COLUMN appPassword TEXT");
-    console.log("Added 'appPassword' column to accounts.");
-  } catch(e) { console.error("Migration Error (appPassword):", e.message); }
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id SERIAL PRIMARY KEY,
+        email TEXT UNIQUE,
+        appPassword TEXT
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS recipients (
+        id TEXT,
+        email TEXT,
+        name TEXT,
+        business TEXT,
+        unsubscribed INTEGER DEFAULT 0,
+        UNIQUE(email)
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS campaigns (
+        id TEXT PRIMARY KEY,
+        subject TEXT,
+        body TEXT,
+        status TEXT DEFAULT 'idle',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS sent_emails (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT,
+        recipient_email TEXT,
+        account_email TEXT,
+        status TEXT,
+        opened_at TIMESTAMP,
+        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS follow_ups (
+        id SERIAL PRIMARY KEY,
+        campaign_id TEXT,
+        delay_days INTEGER,
+        subject TEXT,
+        body TEXT
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS scheduled_emails (
+        id TEXT PRIMARY KEY,
+        campaign_id TEXT,
+        recipient_email TEXT,
+        account_email TEXT,
+        subject TEXT,
+        body TEXT,
+        scheduled_at TIMESTAMP,
+        status TEXT DEFAULT 'pending'
+      );
+    `);
+    console.log('Database tables initialized');
+  } catch (err) {
+    console.error('Database initialization error:', err);
+  }
 }
 
+initDB();
 
-db.exec(`
-  CREATE TABLE IF NOT EXISTS recipients (
-    id TEXT PRIMARY KEY,
-    email TEXT,
-    name TEXT,
-    business TEXT,
-    unsubscribed INTEGER DEFAULT 0,
-    UNIQUE(email)
-  );
-
-  CREATE TABLE IF NOT EXISTS campaigns (
-    id TEXT PRIMARY KEY,
-    subject TEXT,
-    body TEXT,
-    status TEXT DEFAULT 'idle',
-    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-  );
-
-  CREATE TABLE IF NOT EXISTS sent_emails (
-    id TEXT PRIMARY KEY,
-    campaign_id TEXT,
-    recipient_email TEXT,
-    account_email TEXT,
-    status TEXT,
-    opened_at DATETIME,
-    sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS follow_ups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    campaign_id TEXT,
-    delay_days INTEGER,
-    subject TEXT,
-    body TEXT,
-    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
-  );
-
-  CREATE TABLE IF NOT EXISTS scheduled_emails (
-    id TEXT PRIMARY KEY,
-    campaign_id TEXT,
-    recipient_email TEXT,
-    account_email TEXT,
-    subject TEXT,
-    body TEXT,
-    scheduled_at DATETIME,
-    status TEXT DEFAULT 'pending',
-    FOREIGN KEY(campaign_id) REFERENCES campaigns(id)
-  );
-`);
-
-module.exports = db;
+module.exports = pool;

@@ -29,3 +29,4 @@ dist-ssr
 .env.vercel
 *.db
 api/package-lock.json
+credentials.txt
