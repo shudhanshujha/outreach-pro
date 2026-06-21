@@ -32,21 +32,32 @@ app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running');
 });
 
-app.post('/api/test-smtp', async (req, res) => {
-  const { email, appPassword } = req.body;
-  if (!email || !appPassword) {
-    return res.status(400).json({ error: 'email and appPassword required' });
+const net = require('net');
+app.get('/api/diagnostics', async (req, res) => {
+  const results = [];
+  // 1) DNS resolution
+  await new Promise(r => require('dns').resolve4('smtp.gmail.com', (err, addrs) => { results.push({ test:'dns', ipv4: addrs, err: err?.message }); r(); }));
+  await new Promise(r => require('dns').resolve6('smtp.gmail.com', (err, addrs) => { results.push({ test:'dns6', ipv6: addrs, err: err?.message }); r(); }));
+  // 2) Raw TCP connect to port 465
+  for (const port of [465, 587]) {
+    try {
+      await new Promise((resolve, reject) => {
+        const s = net.createConnection({ host:'smtp.gmail.com', port, family:4, timeout:10000 }, () => { s.destroy(); resolve(); });
+        s.on('error', reject); s.on('timeout', () => { s.destroy(); reject(new Error('timeout')); });
+      });
+      results.push({ test:`tcp_port_${port}`, status:'ok' });
+    } catch (e) { results.push({ test:`tcp_port_${port}`, status:'fail', error: e.message }); }
   }
-  try {
-    const transporter = nodemailer.createTransport({
-      host: 'smtp.gmail.com', port: 465, secure: true,
-      auth: { user: email, pass: appPassword }
-    });
-    await transporter.verify();
-    res.json({ success: true, message: 'SMTP connection verified!' });
-  } catch (err) {
-    res.json({ success: false, error: err.message, code: err.code });
+  // 3) Try Nodemailer verify on port 465
+  for (const port of [465, 587]) {
+    const secure = port === 465;
+    try {
+      const t = nodemailer.createTransport({ host:'smtp.gmail.com', port, secure, auth:{ user:req.query.email, pass:req.query.pass }, connectionTimeout:15000 });
+      await t.verify();
+      results.push({ test:`nodemailer_${port}`, status:'ok' });
+    } catch (e) { results.push({ test:`nodemailer_${port}`, status:'fail', error: e.message }); }
   }
+  res.json(results);
 });
 
 // ============================================================
