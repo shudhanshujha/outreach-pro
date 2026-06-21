@@ -29,6 +29,8 @@ function createTransporter(account) {
     host: 'smtp-relay.brevo.com',
     port: 587,
     secure: false,
+    connectionTimeout: 30000,
+    socketTimeout: 30000,
     auth: {
       user: account.email,
       pass: brevoKey
