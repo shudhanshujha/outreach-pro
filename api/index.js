@@ -32,6 +32,23 @@ app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running');
 });
 
+app.post('/api/test-smtp', async (req, res) => {
+  const { email, appPassword } = req.body;
+  if (!email || !appPassword) {
+    return res.status(400).json({ error: 'email and appPassword required' });
+  }
+  try {
+    const transporter = nodemailer.createTransport({
+      host: 'smtp.gmail.com', port: 465, secure: true,
+      auth: { user: email, pass: appPassword }
+    });
+    await transporter.verify();
+    res.json({ success: true, message: 'SMTP connection verified!' });
+  } catch (err) {
+    res.json({ success: false, error: err.message, code: err.code });
+  }
+});
+
 // ============================================================
 // ACCOUNTS
 // ============================================================
