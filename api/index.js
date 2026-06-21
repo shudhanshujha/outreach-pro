@@ -2,7 +2,6 @@ require('dotenv').config();
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
-const nodemailer = require('nodemailer');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('./db');
@@ -16,26 +15,40 @@ const PORT = process.env.PORT || 3001;
 const BASE_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-let brevoKey = process.env.BREVO_SMTP_KEY;
-(async () => {
-  if (!brevoKey) {
-    const { data } = await supabase.from('app_settings').select('value').eq('key', 'BREVO_SMTP_KEY').maybeSingle();
-    if (data?.value) brevoKey = data.value;
-  }
-})();
+const brevoKeyPromise = process.env.BREVO_API_KEY
+  ? Promise.resolve(process.env.BREVO_API_KEY)
+  : supabase.from('app_settings').select('value').eq('key', 'BREVO_API_KEY').maybeSingle()
+      .then(({ data }) => data?.value || null);
 
-function createTransporter(account) {
-  return nodemailer.createTransport({
-    host: 'smtp-relay.brevo.com',
-    port: 587,
-    secure: false,
-    connectionTimeout: 30000,
-    socketTimeout: 30000,
-    auth: {
-      user: account.email,
-      pass: brevoKey
-    }
+async function getBrevoKey() {
+  const key = await brevoKeyPromise;
+  if (!key) throw new Error('BREVO_API_KEY not configured');
+  return key;
+}
+
+async function sendViaBrevo({ from, to, subject, html, sentId, campaignId, recipientEmail, accountEmail }) {
+  const key = await getBrevoKey();
+  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+    method: 'POST',
+    headers: { 'api-key': key, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sender: { email: from, name: from.split('@')[0] },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html
+    })
   });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error('Brevo API error: ' + res.status + ' ' + text);
+  }
+  const result = await res.json();
+  if (sentId && campaignId && recipientEmail && accountEmail) {
+    await supabase.from('sent_emails').insert({
+      id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent'
+    });
+  }
+  return result;
 }
 
 app.get('/', (req, res) => {
@@ -143,24 +156,20 @@ async function runBackgroundWorker() {
       const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
       if (!accountData || !accountData.appPassword) continue;
       try {
-        const transporter = createTransporter(accountData);
         const sentId = uuidv4();
-        await transporter.sendMail({
+        await sendViaBrevo({
           from: email.account_email,
           to: email.recipient_email,
           subject: email.subject,
           html: email.body +
             '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />' +
-            '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + email.recipient_email + '">Unsubscribe</a></div>'
+            '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + email.recipient_email + '">Unsubscribe</a></div>',
+          sentId,
+          campaignId: email.campaign_id,
+          recipientEmail: email.recipient_email,
+          accountEmail: email.account_email
         });
         await supabase.from('scheduled_emails').update({ status: 'sent' }).eq('id', email.id);
-        await supabase.from('sent_emails').insert({
-          id: sentId,
-          campaign_id: email.campaign_id,
-          recipient_email: email.recipient_email,
-          account_email: email.account_email,
-          status: 'sent'
-        });
       } catch (err) { console.error('Follow-up send failed:', err.message); }
     }
   } catch (err) { console.error('Worker error:', err); }
@@ -239,22 +248,16 @@ app.post('/api/send', async (req, res) => {
         activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + '...', timestamp: new Date() });
 
         try {
-          const transporter = createTransporter(accountData);
           const sentId = uuidv4();
           const pSubject = subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const pBody = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '') +
             '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />' +
             '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + recipient.email + '">Unsubscribe</a></div>';
 
-          await transporter.sendMail({ from: accEmail, to: recipient.email, subject: pSubject, html: pBody });
-          const { error: insertErr } = await supabase.from('sent_emails').insert({
-            id: sentId,
-            campaign_id: campaignId,
-            recipient_email: recipient.email,
-            account_email: accEmail,
-            status: 'sent'
+          await sendViaBrevo({
+            from: accEmail, to: recipient.email, subject: pSubject, html: pBody,
+            sentId, campaignId, recipientEmail: recipient.email, accountEmail: accEmail
           });
-          if (insertErr) throw insertErr;
           activeLogs.push({ text: 'Sent to ' + recipient.email, type: 'success', timestamp: new Date() });
         } catch (err) {
           console.error('Email send error:', err);
