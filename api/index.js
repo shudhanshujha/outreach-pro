@@ -49,6 +49,24 @@ app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running');
 });
 
+app.get('/api/test-axios', async (req, res) => {
+  try {
+    const key = await getBrevoKey();
+    const r = await axios.post('https://api.brevo.com/v3/smtp/email', {
+      sender: { email: 'test@test.com' },
+      to: [{ email: 'test@test.com' }],
+      subject: 'test',
+      htmlContent: 'test'
+    }, {
+      headers: { 'api-key': key },
+      timeout: 10000
+    });
+    res.json({ ok: true, status: r.status, data: r.data });
+  } catch (err) {
+    res.status(500).json({ error: err.message, stack: err.stack });
+  }
+});
+
 // ============================================================
 // ACCOUNTS
 // ============================================================
