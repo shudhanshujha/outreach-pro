@@ -20,6 +20,7 @@ function createTransporter(account) {
     port: 587,
     secure: false,
     family: 4,
+    connectionTimeout: 30000,
     auth: {
       user: account.email,
       pass: account.appPassword
