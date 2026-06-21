@@ -1,4 +1,6 @@
 require('dotenv').config();
+const dns = require('dns');
+dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
@@ -19,7 +21,6 @@ function createTransporter(account) {
     host: 'smtp.gmail.com',
     port: 587,
     secure: false,
-    family: 4,
     connectionTimeout: 30000,
     auth: {
       user: account.email,
