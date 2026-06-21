@@ -1,84 +1,12 @@
-const { Pool } = require('pg');
+const { createClient } = require('@supabase/supabase-js');
 
-const pool = new Pool(
-  process.env.DATABASE_URL
-    ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
-    : {
-        host: process.env.SUPABASE_HOST || 'db.usycsxknizcjbuftuzqr.supabase.co',
-        port: parseInt(process.env.SUPABASE_PORT || '6543'),
-        database: process.env.SUPABASE_DB || 'postgres',
-        user: process.env.SUPABASE_USER || 'postgres',
-        password: process.env.SUPABASE_PASSWORD || '7545006695@Mayank',
-        ssl: { rejectUnauthorized: false }
-      }
-);
+const supabaseUrl = process.env.SUPABASE_URL || 'https://usycsxknizcjbuftuzqr.supabase.co';
+const supabaseKey = process.env.SUPABASE_KEY || 'sb_publishable_ftNO2ex_Yhp3YuLV8AvAWQ_QMtbIxeb';
 
-async function initDB() {
-  try {
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS accounts (
-        id SERIAL PRIMARY KEY,
-        email TEXT UNIQUE,
-        appPassword TEXT
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS recipients (
-        id TEXT,
-        email TEXT,
-        name TEXT,
-        business TEXT,
-        unsubscribed INTEGER DEFAULT 0,
-        UNIQUE(email)
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS campaigns (
-        id TEXT PRIMARY KEY,
-        subject TEXT,
-        body TEXT,
-        status TEXT DEFAULT 'idle',
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS sent_emails (
-        id TEXT PRIMARY KEY,
-        campaign_id TEXT,
-        recipient_email TEXT,
-        account_email TEXT,
-        status TEXT,
-        opened_at TIMESTAMP,
-        sent_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS follow_ups (
-        id SERIAL PRIMARY KEY,
-        campaign_id TEXT,
-        delay_days INTEGER,
-        subject TEXT,
-        body TEXT
-      );
-    `);
-    await pool.query(`
-      CREATE TABLE IF NOT EXISTS scheduled_emails (
-        id TEXT PRIMARY KEY,
-        campaign_id TEXT,
-        recipient_email TEXT,
-        account_email TEXT,
-        subject TEXT,
-        body TEXT,
-        scheduled_at TIMESTAMP,
-        status TEXT DEFAULT 'pending'
-      );
-    `);
-    console.log('Database tables initialized');
-  } catch (err) {
-    console.error('Database initialization error:', err);
-  }
-}
 
-initDB();
 
-module.exports = pool;
+const supabase = createClient(supabaseUrl, supabaseKey);
+
+console.log('Supabase client initialized');
+
+module.exports = supabase;

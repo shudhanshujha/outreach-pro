@@ -3,7 +3,7 @@ const express = require('express');
 const nodemailer = require('nodemailer');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
-const pool = require('./db');
+const supabase = require('./db');
 const { ImapFlow } = require('imapflow');
 
 const app = express();
@@ -36,8 +36,9 @@ app.get('/', (req, res) => {
 
 app.get('/api/accounts', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT email FROM accounts');
-    res.json({ accounts: rows });
+    const { data, error } = await supabase.from('accounts').select('email');
+    if (error) throw error;
+    res.json({ accounts: data });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -49,10 +50,8 @@ app.post('/api/accounts', async (req, res) => {
     return res.status(400).json({ error: 'Email and app password are required' });
   }
   try {
-    await pool.query(
-      'INSERT INTO accounts (email, appPassword) VALUES ($1, $2) ON CONFLICT (email) DO UPDATE SET appPassword = $2',
-      [email, appPassword]
-    );
+    const { error } = await supabase.from('accounts').upsert({ email, appPassword }, { onConflict: 'email' });
+    if (error) throw error;
     res.json({ success: true, email });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -61,7 +60,8 @@ app.post('/api/accounts', async (req, res) => {
 
 app.delete('/api/accounts/:email', async (req, res) => {
   try {
-    await pool.query('DELETE FROM accounts WHERE email = $1', [req.params.email]);
+    const { error } = await supabase.from('accounts').delete().eq('email', req.params.email);
+    if (error) throw error;
     res.json({ success: true });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -73,18 +73,25 @@ app.delete('/api/accounts/:email', async (req, res) => {
 // ============================================================
 app.get('/api/t/:id.png', async (req, res) => {
   try {
-    const { rows } = await pool.query('SELECT * FROM sent_emails WHERE id = $1', [req.params.id]);
-    const emailData = rows[0];
+    const { data: emailData, error } = await supabase.from('sent_emails').select('*').eq('id', req.params.id).maybeSingle();
+    if (error) throw error;
     if (emailData && !emailData.opened_at) {
-      await pool.query('UPDATE sent_emails SET opened_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
-      const { rows: followUps } = await pool.query('SELECT * FROM follow_ups WHERE campaign_id = $1', [emailData.campaign_id]);
-      for (const fu of followUps) {
+      const { error: updateErr } = await supabase.from('sent_emails').update({ opened_at: new Date().toISOString() }).eq('id', req.params.id);
+      if (updateErr) throw updateErr;
+      const { data: followUps } = await supabase.from('follow_ups').select('*').eq('campaign_id', emailData.campaign_id);
+      for (const fu of followUps || []) {
         const scheduledTime = new Date();
         scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
-        await pool.query(
-          'INSERT INTO scheduled_emails (id, campaign_id, recipient_email, account_email, subject, body, scheduled_at) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (id) DO NOTHING',
-          [uuidv4(), emailData.campaign_id, emailData.recipient_email, emailData.account_email, fu.subject, fu.body, scheduledTime.toISOString()]
-        );
+        const { error: insertErr } = await supabase.from('scheduled_emails').upsert({
+          id: uuidv4(),
+          campaign_id: emailData.campaign_id,
+          recipient_email: emailData.recipient_email,
+          account_email: emailData.account_email,
+          subject: fu.subject,
+          body: fu.body,
+          scheduled_at: scheduledTime.toISOString()
+        }, { onConflict: 'id', ignoreDuplicates: true });
+        if (insertErr) console.error('Scheduling follow-up failed:', insertErr.message);
       }
     }
   } catch (err) { console.error('Tracking error:', err); }
@@ -98,14 +105,15 @@ app.get('/api/t/:id.png', async (req, res) => {
 // ============================================================
 app.get('/api/unsubscribe/:email', async (req, res) => {
   try {
-    await pool.query(
-      'INSERT INTO recipients (id, email, unsubscribed) VALUES ($1, $2, 1) ON CONFLICT (email) DO UPDATE SET unsubscribed = 1',
-      [uuidv4(), req.params.email]
-    );
-    await pool.query(
-      'UPDATE scheduled_emails SET status = $1 WHERE recipient_email = $2 AND status = $3',
-      ['cancelled', req.params.email, 'pending']
-    );
+    const { error: upsertErr } = await supabase.from('recipients').upsert({
+      id: uuidv4(),
+      email: req.params.email,
+      unsubscribed: 1
+    }, { onConflict: 'email' });
+    if (upsertErr) throw upsertErr;
+    const { error: updateErr } = await supabase.from('scheduled_emails').update({ status: 'cancelled' })
+      .eq('recipient_email', req.params.email).eq('status', 'pending');
+    if (updateErr) throw updateErr;
     res.send('<h1>Unsubscribed successfully.</h1>');
   } catch (err) { res.status(500).send('Error'); }
 });
@@ -116,13 +124,14 @@ app.get('/api/unsubscribe/:email', async (req, res) => {
 async function runBackgroundWorker() {
   try {
     const now = new Date().toISOString();
-    const { rows: pending } = await pool.query('SELECT * FROM scheduled_emails WHERE status = $1 AND scheduled_at <= $2', ['pending', now]);
-    for (const email of pending) {
-      const { rows: accountRows } = await pool.query('SELECT * FROM accounts WHERE email = $1', [email.account_email]);
-      const account = accountRows[0];
-      if (!account || !account.appPassword) continue;
+    const { data: pending, error: fetchErr } = await supabase.from('scheduled_emails').select('*')
+      .eq('status', 'pending').lte('scheduled_at', now);
+    if (fetchErr) throw fetchErr;
+    for (const email of pending || []) {
+      const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
+      if (!accountData || !accountData.appPassword) continue;
       try {
-        const transporter = createTransporter(account);
+        const transporter = createTransporter(accountData);
         const sentId = uuidv4();
         await transporter.sendMail({
           from: email.account_email,
@@ -132,11 +141,14 @@ async function runBackgroundWorker() {
             '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />' +
             '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + email.recipient_email + '">Unsubscribe</a></div>'
         });
-        await pool.query('UPDATE scheduled_emails SET status = $1 WHERE id = $2', ['sent', email.id]);
-        await pool.query(
-          'INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES ($1, $2, $3, $4, $5)',
-          [sentId, email.campaign_id, email.recipient_email, email.account_email, 'sent']
-        );
+        await supabase.from('scheduled_emails').update({ status: 'sent' }).eq('id', email.id);
+        await supabase.from('sent_emails').insert({
+          id: sentId,
+          campaign_id: email.campaign_id,
+          recipient_email: email.recipient_email,
+          account_email: email.account_email,
+          status: 'sent'
+        });
       } catch (err) { console.error('Follow-up send failed:', err.message); }
     }
   } catch (err) { console.error('Worker error:', err); }
@@ -171,16 +183,19 @@ app.post('/api/send', async (req, res) => {
 
   (async () => {
     try {
-      await pool.query(
-        'INSERT INTO campaigns (id, subject, body, status) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO UPDATE SET subject = $2, body = $3, status = $4',
-        [campaignId, subject, body, 'running']
-      );
+      const { error: campaignErr } = await supabase.from('campaigns').upsert({
+        id: campaignId, subject, body, status: 'running'
+      }, { onConflict: 'id' });
+      if (campaignErr) throw campaignErr;
 
       for (const fu of followUps) {
-        await pool.query(
-          'INSERT INTO follow_ups (campaign_id, delay_days, subject, body) VALUES ($1, $2, $3, $4)',
-          [campaignId, fu.delayDays, fu.subject, fu.body]
-        );
+        const { error: fuErr } = await supabase.from('follow_ups').insert({
+          campaign_id: campaignId,
+          delay_days: fu.delayDays,
+          subject: fu.subject,
+          body: fu.body
+        });
+        if (fuErr) throw fuErr;
       }
 
       for (let i = 0; i < recipients.length; i++) {
@@ -195,18 +210,16 @@ app.post('/api/send', async (req, res) => {
           continue;
         }
 
-        const { rows: unsubRows } = await pool.query('SELECT unsubscribed FROM recipients WHERE email = $1', [recipient.email]);
-        const isUnsubbed = unsubRows[0];
-        if (isUnsubbed?.unsubscribed) {
+        const { data: unsubData } = await supabase.from('recipients').select('unsubscribed').eq('email', recipient.email).maybeSingle();
+        if (unsubData?.unsubscribed) {
           activeLogs.push({ text: 'Skipping ' + recipient.email + ' (unsubscribed)', type: 'info', timestamp: new Date() });
           continue;
         }
 
         const accEmail = accountEmails[i % accountEmails.length].user;
-        const { rows: accountRows } = await pool.query('SELECT * FROM accounts WHERE email = $1', [accEmail]);
-        const account = accountRows[0];
+        const { data: accountData } = await supabase.from('accounts').select('*').eq('email', accEmail).maybeSingle();
 
-        if (!account || !account.appPassword) {
+        if (!accountData || !accountData.appPassword) {
           activeLogs.push({ text: 'Account ' + accEmail + ' has no app password set.', type: 'error', timestamp: new Date() });
           continue;
         }
@@ -214,7 +227,7 @@ app.post('/api/send', async (req, res) => {
         activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + '...', timestamp: new Date() });
 
         try {
-          const transporter = createTransporter(account);
+          const transporter = createTransporter(accountData);
           const sentId = uuidv4();
           const pSubject = subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const pBody = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '') +
@@ -222,10 +235,14 @@ app.post('/api/send', async (req, res) => {
             '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + recipient.email + '">Unsubscribe</a></div>';
 
           await transporter.sendMail({ from: accEmail, to: recipient.email, subject: pSubject, html: pBody });
-          await pool.query(
-            'INSERT INTO sent_emails (id, campaign_id, recipient_email, account_email, status) VALUES ($1, $2, $3, $4, $5)',
-            [sentId, campaignId, recipient.email, accEmail, 'sent']
-          );
+          const { error: insertErr } = await supabase.from('sent_emails').insert({
+            id: sentId,
+            campaign_id: campaignId,
+            recipient_email: recipient.email,
+            account_email: accEmail,
+            status: 'sent'
+          });
+          if (insertErr) throw insertErr;
           activeLogs.push({ text: 'Sent to ' + recipient.email, type: 'success', timestamp: new Date() });
         } catch (err) {
           console.error('Email send error:', err);
@@ -239,7 +256,8 @@ app.post('/api/send', async (req, res) => {
       }
 
       activeStatus = activeStop ? 'stopped' : 'completed';
-      await pool.query('UPDATE campaigns SET status = $1 WHERE id = $2', [activeStatus, campaignId]);
+      const { error: updateErr } = await supabase.from('campaigns').update({ status: activeStatus }).eq('id', campaignId);
+      if (updateErr) console.error('Campaign status update error:', updateErr.message);
       activeLogs.push({ text: 'Campaign ' + activeStatus + '.', type: 'info', timestamp: new Date() });
     } catch (err) {
       console.error('Fatal campaign error:', err);
@@ -264,8 +282,8 @@ app.post('/api/inbox', async (req, res) => {
   if (!account?.user) return res.status(400).json({ error: 'No account specified' });
 
   try {
-    const { rows: dbAccountRows } = await pool.query('SELECT * FROM accounts WHERE email = $1', [account.user]);
-    const dbAccount = dbAccountRows[0];
+    const { data: dbAccount, error } = await supabase.from('accounts').select('*').eq('email', account.user).maybeSingle();
+    if (error) throw error;
     if (!dbAccount || !dbAccount.appPassword) {
       return res.status(404).json({ error: 'Account not found or no app password set.' });
     }
