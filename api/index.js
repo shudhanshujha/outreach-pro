@@ -2,6 +2,7 @@ require('dotenv').config();
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
+const axios = require('axios');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 const supabase = require('./db');
@@ -28,27 +29,20 @@ async function getBrevoKey() {
 
 async function sendViaBrevo({ from, to, subject, html, sentId, campaignId, recipientEmail, accountEmail }) {
   const key = await getBrevoKey();
-  const res = await fetch('https://api.brevo.com/v3/smtp/email', {
-    method: 'POST',
-    headers: { 'api-key': key, 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sender: { email: from, name: from.split('@')[0] },
-      to: [{ email: to }],
-      subject,
-      htmlContent: html
-    })
+  await axios.post('https://api.brevo.com/v3/smtp/email', {
+    sender: { email: from, name: from.split('@')[0] },
+    to: [{ email: to }],
+    subject,
+    htmlContent: html
+  }, {
+    headers: { 'api-key': key },
+    timeout: 15000
   });
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error('Brevo API error: ' + res.status + ' ' + text);
-  }
-  const result = await res.json();
   if (sentId && campaignId && recipientEmail && accountEmail) {
     await supabase.from('sent_emails').insert({
       id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent'
     });
   }
-  return result;
 }
 
 app.get('/', (req, res) => {
