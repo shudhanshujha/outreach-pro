@@ -1,9 +1,17 @@
 const { Pool } = require('pg');
 
-const pool = new Pool({
-  connectionString: process.env.DATABASE_URL,
-  ssl: process.env.DATABASE_URL ? { rejectUnauthorized: false } : false
-});
+const pool = new Pool(
+  process.env.DATABASE_URL
+    ? { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } }
+    : {
+        host: process.env.SUPABASE_HOST || 'db.usycsxknizcjbuftuzqr.supabase.co',
+        port: parseInt(process.env.SUPABASE_PORT || '6543'),
+        database: process.env.SUPABASE_DB || 'postgres',
+        user: process.env.SUPABASE_USER || 'postgres',
+        password: process.env.SUPABASE_PASSWORD || '7545006695@Mayank',
+        ssl: { rejectUnauthorized: false }
+      }
+);
 
 async function initDB() {
   try {
