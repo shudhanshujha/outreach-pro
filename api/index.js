@@ -18,46 +18,18 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
 function createTransporter(account) {
   return nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 465,
-    secure: true,
+    host: 'smtp-relay.brevo.com',
+    port: 587,
+    secure: false,
     auth: {
       user: account.email,
-      pass: account.appPassword
+      pass: process.env.BREVO_SMTP_KEY
     }
   });
 }
 
 app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running');
-});
-
-const net = require('net');
-app.get('/api/diagnostics', async (req, res) => {
-  const results = [];
-  // 1) DNS resolution
-  await new Promise(r => require('dns').resolve4('smtp.gmail.com', (err, addrs) => { results.push({ test:'dns', ipv4: addrs, err: err?.message }); r(); }));
-  await new Promise(r => require('dns').resolve6('smtp.gmail.com', (err, addrs) => { results.push({ test:'dns6', ipv6: addrs, err: err?.message }); r(); }));
-  // 2) Raw TCP connect to port 465
-  for (const port of [465, 587]) {
-    try {
-      await new Promise((resolve, reject) => {
-        const s = net.createConnection({ host:'smtp.gmail.com', port, family:4, timeout:10000 }, () => { s.destroy(); resolve(); });
-        s.on('error', reject); s.on('timeout', () => { s.destroy(); reject(new Error('timeout')); });
-      });
-      results.push({ test:`tcp_port_${port}`, status:'ok' });
-    } catch (e) { results.push({ test:`tcp_port_${port}`, status:'fail', error: e.message }); }
-  }
-  // 3) Try Nodemailer verify on port 465
-  for (const port of [465, 587]) {
-    const secure = port === 465;
-    try {
-      const t = nodemailer.createTransport({ host:'smtp.gmail.com', port, secure, auth:{ user:req.query.email, pass:req.query.pass }, connectionTimeout:15000 });
-      await t.verify();
-      results.push({ test:`nodemailer_${port}`, status:'ok' });
-    } catch (e) { results.push({ test:`nodemailer_${port}`, status:'fail', error: e.message }); }
-  }
-  res.json(results);
 });
 
 // ============================================================
