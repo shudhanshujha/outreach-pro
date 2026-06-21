@@ -19,9 +19,8 @@ const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 function createTransporter(account) {
   return nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 587,
-    secure: false,
-    connectionTimeout: 30000,
+    port: 465,
+    secure: true,
     auth: {
       user: account.email,
       pass: account.appPassword
