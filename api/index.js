@@ -178,9 +178,10 @@ let activeStatus = 'idle';
 let activeStop = false;
 
 app.post('/api/send', async (req, res) => {
-  if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
+  try {
+    if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
 
-  const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4() } = req.body;
+    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4() } = req.body;
 
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
     return res.status(400).json({ error: 'No recipients provided' });
@@ -274,6 +275,11 @@ app.post('/api/send', async (req, res) => {
       activeLogs.push({ text: 'Fatal Error: ' + err.message, type: 'error', timestamp: new Date() });
     }
   })();
+  } catch (err) {
+    activeStatus = 'idle';
+    activeLogs = [];
+    res.status(500).json({ error: err.message });
+  }
 });
 
 app.post('/api/stop', (req, res) => {
