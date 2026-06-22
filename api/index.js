@@ -29,15 +29,20 @@ async function getBrevoKey() {
 
 async function sendViaBrevo({ from, to, subject, html, sentId, campaignId, recipientEmail, accountEmail }) {
   const key = await getBrevoKey();
-  await axios.post('https://api.brevo.com/v3/smtp/email', {
-    sender: { email: from, name: from.split('@')[0] },
-    to: [{ email: to }],
-    subject,
-    htmlContent: html
-  }, {
-    headers: { 'api-key': key },
-    timeout: 15000
-  });
+  try {
+    await axios.post('https://api.brevo.com/v3/smtp/email', {
+      sender: { email: from, name: from.split('@')[0] },
+      to: [{ email: to }],
+      subject,
+      htmlContent: html
+    }, {
+      headers: { 'api-key': key },
+      timeout: 15000
+    });
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    throw new Error('Brevo API: ' + detail);
+  }
   if (sentId && campaignId && recipientEmail && accountEmail) {
     await supabase.from('sent_emails').insert({
       id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent'
