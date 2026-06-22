@@ -344,6 +344,63 @@ app.post('/api/inbox', async (req, res) => {
 });
 
 // ============================================================
+// TEST EMAIL (diagnostic)
+// ============================================================
+app.post('/api/test-email', async (req, res) => {
+  const { to } = req.body;
+  if (!to) return res.status(400).json({ error: 'Provide a "to" email address in the request body' });
+
+  let key;
+  try {
+    key = await getBrevoKey();
+  } catch (err) {
+    return res.status(500).json({ error: 'BREVO_API_KEY not set', detail: err.message });
+  }
+
+  // Verify the key is valid by fetching account info
+  let accountInfo;
+  try {
+    const accountRes = await axios.get('https://api.brevo.com/v3/account', {
+      headers: { 'api-key': key },
+      timeout: 10000
+    });
+    accountInfo = accountRes.data;
+  } catch (err) {
+    return res.status(500).json({
+      error: 'Brevo API key invalid or request failed',
+      detail: err.response?.data || err.message
+    });
+  }
+
+  // Attempt to send a test email
+  try {
+    const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
+      sender: { email: accountInfo.email, name: 'OutreachPro Test' },
+      to: [{ email: to }],
+      subject: 'OutreachPro - Test Email',
+      htmlContent: '<h2>Test Email</h2><p>If you see this, Brevo is working correctly!</p>'
+    }, {
+      headers: { 'api-key': key },
+      timeout: 15000
+    });
+
+    res.json({
+      success: true,
+      brevoAccount: accountInfo.email,
+      brevoCompany: accountInfo.companyName,
+      brevoResponse: response.data,
+      note: 'Email sent successfully via Brevo. Check spam folder if not in inbox.'
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: 'Brevo send failed',
+      brevoAccount: accountInfo?.email,
+      detail: err.response?.data || err.message
+    });
+  }
+});
+
+// ============================================================
 // ENRICH (stub)
 // ============================================================
 app.post('/api/enrich', (req, res) => {
