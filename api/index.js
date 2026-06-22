@@ -16,15 +16,30 @@ const PORT = process.env.PORT || 3001;
 const BASE_URL = process.env.BACKEND_URL || `http://localhost:${PORT}`;
 const sleep = (ms) => new Promise(resolve => setTimeout(resolve, ms));
 
-const brevoKeyPromise = process.env.BREVO_API_KEY
-  ? Promise.resolve(process.env.BREVO_API_KEY)
-  : supabase.from('app_settings').select('value').eq('key', 'BREVO_API_KEY').maybeSingle()
-      .then(({ data }) => data?.value || null);
+// Dynamic key loader — refreshes every 5 minutes so Render picks up changes without restart
+let _brevoKeyCache = null;
+let _brevoKeyCacheTime = 0;
+const BREVO_KEY_TTL = 5 * 60 * 1000; // 5 minutes
 
 async function getBrevoKey() {
-  const key = await brevoKeyPromise;
-  if (!key) throw new Error('BREVO_API_KEY not configured');
-  return key;
+  // 1. Env var always wins (set in Render dashboard → instant)
+  if (process.env.BREVO_API_KEY) return process.env.BREVO_API_KEY;
+
+  // 2. In-memory cache to avoid hammering Supabase on every email
+  const now = Date.now();
+  if (_brevoKeyCache && (now - _brevoKeyCacheTime) < BREVO_KEY_TTL) {
+    return _brevoKeyCache;
+  }
+
+  // 3. Fresh fetch from Supabase
+  const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'BREVO_API_KEY').maybeSingle();
+  if (error) throw new Error('Failed to fetch BREVO_API_KEY from Supabase: ' + error.message);
+  if (!data?.value) throw new Error('BREVO_API_KEY not configured in env or Supabase app_settings');
+
+  _brevoKeyCache = data.value;
+  _brevoKeyCacheTime = now;
+  console.log('Brevo API key refreshed from Supabase at', new Date().toISOString());
+  return _brevoKeyCache;
 }
 
 async function sendViaBrevo({ from, to, subject, html, sentId, campaignId, recipientEmail, accountEmail }) {
