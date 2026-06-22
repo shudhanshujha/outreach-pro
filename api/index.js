@@ -42,6 +42,28 @@ async function getBrevoKey() {
   return _brevoKeyCache;
 }
 
+let _geminiKeyCache = null;
+let _geminiKeyCacheTime = 0;
+const GEMINI_KEY_TTL = 5 * 60 * 1000; // 5 minutes
+
+async function getGeminiKey() {
+  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+
+  const now = Date.now();
+  if (_geminiKeyCache && (now - _geminiKeyCacheTime) < GEMINI_KEY_TTL) {
+    return _geminiKeyCache;
+  }
+
+  const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'GEMINI_API_KEY').maybeSingle();
+  if (error) throw new Error('Failed to fetch GEMINI_API_KEY from Supabase: ' + error.message);
+
+  _geminiKeyCache = data?.value || null;
+  _geminiKeyCacheTime = now;
+  console.log('Gemini API key refreshed from Supabase at', new Date().toISOString());
+  return _geminiKeyCache;
+}
+
+
 // Only use tracking pixel if we have a real public HTTPS URL (not localhost)
 function isPublicUrl(url) {
   return url && url.startsWith('https://');
@@ -97,6 +119,197 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
 app.get('/', (req, res) => {
   res.send('OutreachPro Backend is running');
 });
+
+// ============================================================
+// SETTINGS
+// ============================================================
+app.get('/api/settings', async (req, res) => {
+  try {
+    const { data, error } = await supabase.from('app_settings').select('key');
+    if (error) throw error;
+    
+    const brevoSet = !!process.env.BREVO_API_KEY || data.some(d => d.key === 'BREVO_API_KEY');
+    const geminiSet = !!process.env.GEMINI_API_KEY || data.some(d => d.key === 'GEMINI_API_KEY');
+    
+    res.json({
+      settings: {
+        BREVO_API_KEY: brevoSet,
+        GEMINI_API_KEY: geminiSet
+      }
+    });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/settings', async (req, res) => {
+  const { key, value } = req.body;
+  if (!key || !value) {
+    return res.status(400).json({ error: 'Key and value are required' });
+  }
+  
+  if (key !== 'BREVO_API_KEY' && key !== 'GEMINI_API_KEY') {
+    return res.status(400).json({ error: 'Invalid setting key' });
+  }
+  
+  try {
+    const { error } = await supabase.from('app_settings').upsert({ key, value }, { onConflict: 'key' });
+    if (error) throw error;
+    
+    if (key === 'BREVO_API_KEY') {
+      _brevoKeyCache = value;
+      _brevoKeyCacheTime = Date.now();
+    } else if (key === 'GEMINI_API_KEY') {
+      _geminiKeyCache = value;
+      _geminiKeyCacheTime = Date.now();
+    }
+    
+    res.json({ success: true });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// AI UTILITIES (GEMINI)
+// ============================================================
+app.post('/api/ai/map-csv', async (req, res) => {
+  const { headers, samples } = req.body;
+  if (!headers || !Array.isArray(headers) || headers.length === 0) {
+    return res.status(400).json({ error: 'CSV headers are required' });
+  }
+
+  let geminiKey;
+  try {
+    geminiKey = await getGeminiKey();
+  } catch (err) {
+    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+  }
+
+  if (!geminiKey) {
+    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+  }
+
+  const prompt = `You are a data assistant mapping CSV column headers to cold outreach recipient properties.
+We need to map columns from the uploaded CSV to the following target fields:
+1. "email": The recipient's email address.
+2. "name": The recipient's full name, first name, or name.
+3. "business": The recipient's company, organization, or business name.
+
+Here are the CSV headers:
+${JSON.stringify(headers)}
+
+Here are some sample rows of data (each element corresponds to the header at the same index):
+${JSON.stringify(samples || [])}
+
+Please analyze the headers and sample values and map them to our targets.
+Respond with a raw JSON object ONLY, containing the keys "emailColumn", "nameColumn", and "businessColumn".
+The values must be the exact header names from the CSV headers above, or null if you cannot find a suitable match.
+Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
+
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        contents: [
+          {
+            parts: [
+              { text: prompt }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      },
+      { timeout: 15000 }
+    );
+
+    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!resultText) {
+      throw new Error('Empty response from Gemini API');
+    }
+    
+    resultText = resultText.trim();
+    if (resultText.startsWith('```')) {
+      resultText = resultText.replace(/^```(json)?/, '').replace(/```$/, '').trim();
+    }
+
+    const mapping = JSON.parse(resultText);
+    res.json(mapping);
+  } catch (err) {
+    console.error('Gemini mapping failed:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Gemini Column Mapping failed: ' + (err.response?.data?.error?.message || err.message) });
+  }
+});
+
+app.post('/api/ai/write-email', async (req, res) => {
+  const { prompt: userPrompt, tone, length } = req.body;
+  if (!userPrompt) {
+    return res.status(400).json({ error: 'Prompt is required' });
+  }
+
+  let geminiKey;
+  try {
+    geminiKey = await getGeminiKey();
+  } catch (err) {
+    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+  }
+
+  if (!geminiKey) {
+    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+  }
+
+  const systemInstructions = `You are an expert cold outreach strategist. Your task is to write a highly converting cold email template.
+Instructions:
+- Write both a subject line and a body.
+- You MUST use two personalization placeholders:
+  * {{name}} for the recipient's name (e.g. Hi {{name}},)
+  * {{business}} for the recipient's business/company name (e.g. I was looking at {{business}}...)
+- The body should be formatted in clean HTML (using <p> and <br /> tags for formatting, do not include <html>, <body> or <head> tags).
+- Maintain the user's requested tone: ${tone || 'professional'}
+- Maintain the user's requested length: ${length || 'medium'}
+- Do NOT output any conversational text or formatting other than the JSON object requested below.
+
+Respond with a raw JSON object containing the keys "subject" and "body".
+Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
+
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        contents: [
+          {
+            parts: [
+              { text: `${systemInstructions}\n\nUser request for email contents: ${userPrompt}` }
+            ]
+          }
+        ],
+        generationConfig: {
+          responseMimeType: "application/json"
+        }
+      },
+      { timeout: 20000 }
+    );
+
+    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!resultText) {
+      throw new Error('Empty response from Gemini API');
+    }
+
+    resultText = resultText.trim();
+    if (resultText.startsWith('```')) {
+      resultText = resultText.replace(/^```(json)?/, '').replace(/```$/, '').trim();
+    }
+
+    const emailTemplate = JSON.parse(resultText);
+    res.json(emailTemplate);
+  } catch (err) {
+    console.error('Gemini write email failed:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Gemini Email generation failed: ' + (err.response?.data?.error?.message || err.message) });
+  }
+});
+
 
 // ============================================================
 // ACCOUNTS
