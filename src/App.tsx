@@ -702,7 +702,7 @@ const Dashboard: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold text-white">Brevo SMTP Settings</h3>
                     <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.BREVO_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                      {settingsStatus.BREVO_API_KEY ? 'Configured' : 'Not Set'}
+                      {settingsStatus.BREVO_API_KEY ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
@@ -732,7 +732,7 @@ const Dashboard: React.FC = () => {
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold text-white">Gemini AI Settings</h3>
                     <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.GEMINI_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                      {settingsStatus.GEMINI_API_KEY ? 'Configured' : 'Not Set'}
+                      {settingsStatus.GEMINI_API_KEY ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
