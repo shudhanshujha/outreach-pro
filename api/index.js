@@ -42,14 +42,43 @@ async function getBrevoKey() {
   return _brevoKeyCache;
 }
 
-async function sendViaBrevo({ from, to, subject, html, sentId, campaignId, recipientEmail, accountEmail }) {
+// Only use tracking pixel if we have a real public HTTPS URL (not localhost)
+function isPublicUrl(url) {
+  return url && url.startsWith('https://');
+}
+
+// Strip HTML tags to generate plain-text version
+function htmlToPlainText(html) {
+  return html
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+// Build clean email body — tracking pixel only if public URL, NO unsubscribe footer
+function buildEmailBody(bodyHtml, sentId) {
+  let html = bodyHtml;
+  if (sentId && isPublicUrl(BASE_URL)) {
+    html += '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />';
+  }
+  return { html, text: htmlToPlainText(bodyHtml) };
+}
+
+async function sendViaBrevo({ from, to, subject, html, textContent, sentId, campaignId, recipientEmail, accountEmail }) {
   const key = await getBrevoKey();
   try {
     await axios.post('https://api.brevo.com/v3/smtp/email', {
       sender: { email: from, name: from.split('@')[0] },
       to: [{ email: to }],
       subject,
-      htmlContent: html
+      htmlContent: html,
+      textContent: textContent || htmlToPlainText(html)
     }, {
       headers: { 'api-key': key },
       timeout: 15000
@@ -171,13 +200,13 @@ async function runBackgroundWorker() {
       if (!accountData || !accountData.appPassword) continue;
       try {
         const sentId = uuidv4();
+        const { html: builtHtml, text: builtText } = buildEmailBody(email.body, sentId);
         await sendViaBrevo({
           from: email.account_email,
           to: email.recipient_email,
           subject: email.subject,
-          html: email.body +
-            '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />' +
-            '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + email.recipient_email + '">Unsubscribe</a></div>',
+          html: builtHtml,
+          textContent: builtText,
           sentId,
           campaignId: email.campaign_id,
           recipientEmail: email.recipient_email,
@@ -265,12 +294,12 @@ app.post('/api/send', async (req, res) => {
         try {
           const sentId = uuidv4();
           const pSubject = subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
-          const pBody = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '') +
-            '<img src="' + BASE_URL + '/api/t/' + sentId + '.png" width="1" height="1" style="display:none" />' +
-            '<div style="margin-top:40px;font-size:11px;color:#999"><a href="' + BASE_URL + '/api/unsubscribe/' + recipient.email + '">Unsubscribe</a></div>';
+          const pBodyHtml = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
+          const { html: builtHtml, text: builtText } = buildEmailBody(pBodyHtml, sentId);
 
           await sendViaBrevo({
-            from: accEmail, to: recipient.email, subject: pSubject, html: pBody,
+            from: accEmail, to: recipient.email, subject: pSubject,
+            html: builtHtml, textContent: builtText,
             sentId, campaignId, recipientEmail: recipient.email, accountEmail: accEmail
           });
           activeLogs.push({ text: 'Sent to ' + recipient.email, type: 'success', timestamp: new Date() });
