@@ -149,15 +149,16 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
   const messageId = `<${uuidv4()}@outreachpro.mail>`;
   const plainText = textContent || htmlToPlainText(html);
 
-  // Use the user's Gmail as sender name/email so recipients see it came from the right account.
-  // Brevo requires sender email to be verified; we use the Brevo account email as actual sender
-  // but set display name + Reply-To to the Gmail account so replies go there.
   const brevoVerifiedEmail = await getBrevoAccountEmail(key);
-  const actualSenderEmail = brevoVerifiedEmail || from;
+  // Always use the Brevo-verified email as the actual sender, otherwise Brevo rejects
+  const actualSenderEmail = brevoVerifiedEmail;
+  if (!actualSenderEmail) {
+    throw new Error('Brevo verified sender email not available. Check Brevo API key.');
+  }
   const senderName = formatSenderName(from);
 
   const extraHeaders = {
-    'Reply-To': from,
+    'Reply-To': `${from}`,
     'Message-ID': messageId,
     'X-Mailer': 'OutreachPro/1.0',
     'Precedence': 'bulk',
@@ -181,7 +182,7 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
       headers: extraHeaders
     }, {
       headers: { 'api-key': key },
-      timeout: 15000
+      timeout: 20000
     });
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
@@ -571,19 +572,16 @@ app.post('/api/send', async (req, res) => {
           continue;
         }
 
-        const { data: unsubData } = await supabase.from('recipients').select('unsubscribed').eq('email', recipient.email).maybeSingle();
-        if (unsubData?.unsubscribed) {
-          activeLogs.push({ text: 'Skipping ' + recipient.email + ' (unsubscribed)', type: 'info', timestamp: new Date() });
-          continue;
-        }
+        // Check unsubscribed
+        try {
+          const { data: unsubData } = await supabase.from('recipients').select('unsubscribed').eq('email', recipient.email).maybeSingle();
+          if (unsubData?.unsubscribed) {
+            activeLogs.push({ text: 'Skipping ' + recipient.email + ' (unsubscribed)', type: 'info', timestamp: new Date() });
+            continue;
+          }
+        } catch (_) { /* skip unsub check on error */ }
 
         const accEmail = accountEmails[i % accountEmails.length].user;
-        const { data: accountData } = await supabase.from('accounts').select('*').eq('email', accEmail).maybeSingle();
-
-        if (!accountData || !accountData.appPassword) {
-          activeLogs.push({ text: 'Account ' + accEmail + ' has no app password set.', type: 'error', timestamp: new Date() });
-          continue;
-        }
 
         activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + '...', timestamp: new Date() });
 
