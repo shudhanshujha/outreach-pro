@@ -149,13 +149,13 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
   const messageId = `<${uuidv4()}@outreachpro.mail>`;
   const plainText = textContent || htmlToPlainText(html);
 
-  // Use the Brevo-verified account email as the sender (same as test email — this is why test email lands in inbox).
-  // Set Reply-To to the user's own address so replies come back to them.
+  // Use the user's Gmail as sender name/email so recipients see it came from the right account.
+  // Brevo requires sender email to be verified; we use the Brevo account email as actual sender
+  // but set display name + Reply-To to the Gmail account so replies go there.
   const brevoVerifiedEmail = await getBrevoAccountEmail(key);
-  const senderEmail = brevoVerifiedEmail || from;
-  const senderName = formatSenderName(from); // still show the user's name
+  const actualSenderEmail = brevoVerifiedEmail || from;
+  const senderName = formatSenderName(from);
 
-  // Build headers that improve deliverability without a custom domain
   const extraHeaders = {
     'Reply-To': from,
     'Message-ID': messageId,
@@ -164,7 +164,6 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
     'X-Entity-Ref-ID': sentId || uuidv4()
   };
 
-  // List-Unsubscribe helps Gmail/Yahoo treat bulk mail as legitimate
   if (recipientEmail) {
     const unsubUrl = `${BASE_URL}/api/unsubscribe/${encodeURIComponent(recipientEmail)}`;
     extraHeaders['List-Unsubscribe'] = `<${unsubUrl}>`;
@@ -173,9 +172,9 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
 
   try {
     await axios.post('https://api.brevo.com/v3/smtp/email', {
-      sender: { email: senderEmail, name: senderName },
+      sender: { email: actualSenderEmail, name: senderName },
       to: [{ email: to }],
-      replyTo: { email: from },
+      replyTo: { email: from, name: senderName },
       subject,
       htmlContent: html,
       textContent: plainText,
@@ -958,6 +957,47 @@ app.post('/api/apollo/search', async (req, res) => {
     console.error('Apollo search error:', detail);
     res.status(500).json({ error: 'Apollo search failed: ' + detail });
   }
+});
+
+// ============================================================
+// DIAGNOSTIC — Brevo connection check
+// ============================================================
+app.get('/api/diagnose', async (req, res) => {
+  const results = { brevo: false, supabase: false, apollo: false };
+  
+  try {
+    const key = await getBrevoKey();
+    const accountRes = await axios.get('https://api.brevo.com/v3/account', {
+      headers: { 'api-key': key },
+      timeout: 10000
+    });
+    results.brevo = { ok: true, email: accountRes.data.email, company: accountRes.data.companyName };
+  } catch (err) {
+    results.brevo = { ok: false, error: err.response?.data?.message || err.message, code: err.response?.data?.code };
+  }
+
+  try {
+    const { data, error } = await supabase.from('accounts').select('email');
+    if (error) throw error;
+    results.supabase = { ok: true, accounts: data.map(a => a.email) };
+  } catch (err) {
+    results.supabase = { ok: false, error: err.message };
+  }
+
+  try {
+    const apolloKey = await getApolloKey();
+    results.apollo = apolloKey ? { ok: true, configured: true } : { ok: true, configured: false };
+  } catch (err) {
+    results.apollo = { ok: false, error: err.message };
+  }
+
+  results.env = {
+    BACKEND_URL: process.env.BACKEND_URL || 'not set',
+    RENDER: !!process.env.RENDER,
+    NODE_ENV: process.env.NODE_ENV || 'not set'
+  };
+
+  res.json(results);
 });
 
 // ============================================================
