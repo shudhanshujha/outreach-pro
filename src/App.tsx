@@ -4,7 +4,7 @@ import {
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
   Inbox, ListTree, Clock, KeyRound, CheckCircle2, Trash2, Square, Plus, X,
-  Upload, Download
+  Upload, Download, Eye, EyeOff, LogOut, Lock
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -19,6 +19,150 @@ interface FollowUp { delayDays: number; subject: string; body: string; }
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 const CACHE_KEY = 'outreach_accounts_cache';
+const SESSION_KEY = 'outreach_session';
+const VALID_USERNAME = 'shudhanshu@2207';
+const VALID_PASSWORD = 'admin@shudhanshu';
+
+// --- LOGIN SCREEN ---
+const LoginScreen: React.FC<{ onLogin: () => void }> = ({ onLogin }) => {
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState('');
+  const [shaking, setShaking] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setLoading(true);
+    setError('');
+    // Simulate a brief async check for UX
+    await new Promise(r => setTimeout(r, 600));
+    if (username === VALID_USERNAME && password === VALID_PASSWORD) {
+      localStorage.setItem(SESSION_KEY, 'true');
+      onLogin();
+    } else {
+      setError('Invalid username or password.');
+      setShaking(true);
+      setTimeout(() => setShaking(false), 600);
+    }
+    setLoading(false);
+  };
+
+  return (
+    <div className="min-h-screen bg-[#070708] flex items-center justify-center p-4">
+      {/* Background glow */}
+      <div className="absolute inset-0 overflow-hidden pointer-events-none">
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[600px] h-[600px] bg-indigo-600/5 rounded-full blur-3xl" />
+      </div>
+
+      <div
+        className={`relative w-full max-w-md transition-all duration-100 ${
+          shaking ? 'animate-[shake_0.5s_ease-in-out]' : ''
+        }`}
+        style={shaking ? { animation: 'shake 0.5s ease-in-out' } : {}}
+      >
+        {/* Card */}
+        <div className="bg-[#0d0d0f] border border-slate-800/60 rounded-3xl p-8 shadow-2xl shadow-black/50">
+          {/* Logo */}
+          <div className="flex flex-col items-center mb-8">
+            <div className="w-14 h-14 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-xl shadow-indigo-500/30 mb-4">
+              <Send className="w-7 h-7 text-white" />
+            </div>
+            <h1 className="text-2xl font-bold text-white tracking-tight">
+              Outreach<span className="text-indigo-400">Pro</span>
+            </h1>
+            <p className="text-slate-500 text-sm mt-1">Sign in to your dashboard</p>
+          </div>
+
+          <form onSubmit={handleLogin} className="space-y-4">
+            {/* Username */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-widest">Username</label>
+              <div className="relative">
+                <input
+                  id="login-username"
+                  type="text"
+                  autoComplete="username"
+                  value={username}
+                  onChange={e => { setUsername(e.target.value); setError(''); }}
+                  placeholder="Enter your username"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-200 outline-none focus:border-indigo-500/60 transition-colors placeholder:text-slate-600"
+                  required
+                />
+              </div>
+            </div>
+
+            {/* Password */}
+            <div className="space-y-1.5">
+              <label className="text-xs font-semibold text-slate-400 uppercase tracking-widest">Password</label>
+              <div className="relative">
+                <input
+                  id="login-password"
+                  type={showPassword ? 'text' : 'password'}
+                  autoComplete="current-password"
+                  value={password}
+                  onChange={e => { setPassword(e.target.value); setError(''); }}
+                  placeholder="Enter your password"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 pr-11 text-sm text-slate-200 outline-none focus:border-indigo-500/60 transition-colors placeholder:text-slate-600"
+                  required
+                />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword(v => !v)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 transition-colors"
+                  tabIndex={-1}
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Error */}
+            {error && (
+              <div className="flex items-center gap-2 text-rose-400 text-xs font-semibold bg-rose-500/10 border border-rose-500/20 rounded-xl px-4 py-2.5">
+                <Lock className="w-3.5 h-3.5 flex-shrink-0" />
+                {error}
+              </div>
+            )}
+
+            {/* Submit */}
+            <button
+              id="login-submit"
+              type="submit"
+              disabled={loading}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-60 text-white font-bold py-3.5 rounded-xl transition-all shadow-lg shadow-indigo-500/20 flex items-center justify-center gap-2 mt-2"
+            >
+              {loading ? (
+                <><Loader2 className="w-4 h-4 animate-spin" /> Signing in...</>
+              ) : (
+                'Sign In'
+              )}
+            </button>
+          </form>
+        </div>
+
+        <p className="text-center text-xs text-slate-700 mt-6">
+          OutreachPro &mdash; Private Dashboard
+        </p>
+      </div>
+
+      {/* Shake keyframe */}
+      <style>{`
+        @keyframes shake {
+          0%, 100% { transform: translateX(0); }
+          15% { transform: translateX(-8px); }
+          30% { transform: translateX(8px); }
+          45% { transform: translateX(-6px); }
+          60% { transform: translateX(6px); }
+          75% { transform: translateX(-3px); }
+          90% { transform: translateX(3px); }
+        }
+      `}</style>
+    </div>
+  );
+};
+
 
 // --- CSV PARSER UTILITY ---
 function parseCSV(text: string): string[][] {
@@ -64,7 +208,7 @@ function parseCSV(text: string): string[][] {
   return result;
 }
 
-const Dashboard: React.FC = () => {
+const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // --- STATE ---
   const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'settings'>('campaign');
   // ✅ Load accounts from localStorage cache on startup (survives page refresh)
@@ -443,7 +587,7 @@ const Dashboard: React.FC = () => {
             <span className="hidden md:block font-medium">Settings</span>
           </button>
         </nav>
-        <div className="p-4 border-t border-slate-800/50 space-y-4">
+        <div className="p-4 border-t border-slate-800/50 space-y-3">
            <div className="space-y-1">
              <Link to="/privacy" className="block text-[10px] text-slate-600 hover:text-slate-400 uppercase font-bold tracking-widest">Privacy Policy</Link>
              <Link to="/terms" className="block text-[10px] text-slate-600 hover:text-slate-400 uppercase font-bold tracking-widest">Terms of Service</Link>
@@ -452,6 +596,14 @@ const Dashboard: React.FC = () => {
               <div className={`w-2 h-2 rounded-full ${status === 'running' ? 'bg-indigo-500 animate-pulse' : 'bg-slate-600'}`} />
               <span className="text-xs font-semibold uppercase tracking-widest text-slate-500">{status}</span>
            </div>
+           <button
+             onClick={onLogout}
+             className="w-full flex items-center gap-3 p-3 rounded-xl text-slate-600 hover:text-rose-400 hover:bg-rose-500/5 transition-all group"
+             title="Sign out"
+           >
+             <LogOut className="w-4 h-4" />
+             <span className="hidden md:block text-xs font-bold uppercase tracking-widest">Sign Out</span>
+           </button>
         </div>
       </aside>
 
@@ -1208,10 +1360,18 @@ const Dashboard: React.FC = () => {
 };
 
 const App: React.FC = () => {
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean>(() => {
+    return localStorage.getItem(SESSION_KEY) === 'true';
+  });
+
+  if (!isLoggedIn) {
+    return <LoginScreen onLogin={() => setIsLoggedIn(true)} />;
+  }
+
   return (
     <Router>
       <Routes>
-        <Route path="/" element={<Dashboard />} />
+        <Route path="/" element={<Dashboard onLogout={() => { localStorage.removeItem(SESSION_KEY); setIsLoggedIn(false); }} />} />
         <Route path="/privacy" element={<PrivacyPolicy />} />
         <Route path="/terms" element={<TermsOfService />} />
       </Routes>
