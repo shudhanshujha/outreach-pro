@@ -149,12 +149,8 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
   const messageId = `<${uuidv4()}@outreachpro.mail>`;
   const plainText = textContent || htmlToPlainText(html);
 
-  const brevoVerifiedEmail = await getBrevoAccountEmail(key);
-  // Always use the Brevo-verified email as the actual sender, otherwise Brevo rejects
-  const actualSenderEmail = brevoVerifiedEmail;
-  if (!actualSenderEmail) {
-    throw new Error('Brevo verified sender email not available. Check Brevo API key.');
-  }
+  // All KloutKrew Gmail accounts are verified as senders in Brevo,
+  // so we send directly from the selected Gmail address.
   const senderName = formatSenderName(from);
 
   const extraHeaders = {
@@ -173,7 +169,7 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
 
   try {
     await axios.post('https://api.brevo.com/v3/smtp/email', {
-      sender: { email: actualSenderEmail, name: senderName },
+      sender: { email: from, name: senderName },
       to: [{ email: to }],
       replyTo: { email: from, name: senderName },
       subject,
