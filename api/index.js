@@ -92,15 +92,76 @@ function buildEmailBody(bodyHtml, sentId) {
   return { html, text: htmlToPlainText(bodyHtml) };
 }
 
+// Format a sender display name from an email address (e.g. john.doe@gmail.com → "John Doe")
+function formatSenderName(email) {
+  const local = email.split('@')[0];
+  return local
+    .replace(/[._-]+/g, ' ')
+    .replace(/\b\w/g, c => c.toUpperCase())
+    .trim();
+}
+
+// Cache the Brevo verified sender email so we don't hit /v3/account on every email
+let _brevoAccountEmail = null;
+let _brevoAccountCacheTime = 0;
+const BREVO_ACCOUNT_TTL = 30 * 60 * 1000; // 30 minutes
+
+async function getBrevoAccountEmail(key) {
+  const now = Date.now();
+  if (_brevoAccountEmail && (now - _brevoAccountCacheTime) < BREVO_ACCOUNT_TTL) {
+    return _brevoAccountEmail;
+  }
+  try {
+    const res = await axios.get('https://api.brevo.com/v3/account', {
+      headers: { 'api-key': key },
+      timeout: 10000
+    });
+    _brevoAccountEmail = res.data?.email || null;
+    _brevoAccountCacheTime = now;
+    console.log('Brevo verified sender fetched:', _brevoAccountEmail);
+  } catch (err) {
+    console.warn('Could not fetch Brevo account email, falling back to sender address:', err.message);
+    _brevoAccountEmail = null;
+  }
+  return _brevoAccountEmail;
+}
+
 async function sendViaBrevo({ from, to, subject, html, textContent, sentId, campaignId, recipientEmail, accountEmail }) {
   const key = await getBrevoKey();
+  const messageId = `<${uuidv4()}@outreachpro.mail>`;
+  const plainText = textContent || htmlToPlainText(html);
+
+  // Use the Brevo-verified account email as the sender (same as test email — this is why test email lands in inbox).
+  // Set Reply-To to the user's own address so replies come back to them.
+  const brevoVerifiedEmail = await getBrevoAccountEmail(key);
+  const senderEmail = brevoVerifiedEmail || from;
+  const senderName = formatSenderName(from); // still show the user's name
+
+  // Build headers that improve deliverability without a custom domain
+  const extraHeaders = {
+    'Reply-To': from,
+    'Message-ID': messageId,
+    'X-Mailer': 'OutreachPro/1.0',
+    'Precedence': 'bulk',
+    'X-Entity-Ref-ID': sentId || uuidv4()
+  };
+
+  // List-Unsubscribe helps Gmail/Yahoo treat bulk mail as legitimate
+  if (recipientEmail) {
+    const unsubUrl = `${BASE_URL}/api/unsubscribe/${encodeURIComponent(recipientEmail)}`;
+    extraHeaders['List-Unsubscribe'] = `<${unsubUrl}>`;
+    extraHeaders['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
+  }
+
   try {
     await axios.post('https://api.brevo.com/v3/smtp/email', {
-      sender: { email: from, name: from.split('@')[0] },
+      sender: { email: senderEmail, name: senderName },
       to: [{ email: to }],
+      replyTo: { email: from },
       subject,
       htmlContent: html,
-      textContent: textContent || htmlToPlainText(html)
+      textContent: plainText,
+      headers: extraHeaders
     }, {
       headers: { 'api-key': key },
       timeout: 15000
@@ -631,11 +692,20 @@ app.post('/api/test-email', async (req, res) => {
 
   // Attempt to send a test email
   try {
+    const testMessageId = `<${uuidv4()}@outreachpro.mail>`;
     const response = await axios.post('https://api.brevo.com/v3/smtp/email', {
-      sender: { email: accountInfo.email, name: 'OutreachPro Test' },
+      sender: { email: accountInfo.email, name: formatSenderName(accountInfo.email) },
       to: [{ email: to }],
-      subject: 'OutreachPro - Test Email',
-      htmlContent: '<h2>Test Email</h2><p>If you see this, Brevo is working correctly!</p>'
+      replyTo: { email: accountInfo.email },
+      subject: 'Connection check from OutreachPro',
+      htmlContent: '<p>Hi there,</p><p>This is a quick connection test from OutreachPro to confirm your Brevo integration is working correctly.</p><p>You can ignore this message.</p>',
+      textContent: 'Hi there,\n\nThis is a quick connection test from OutreachPro to confirm your Brevo integration is working correctly.\n\nYou can ignore this message.',
+      headers: {
+        'Reply-To': accountInfo.email,
+        'Message-ID': testMessageId,
+        'X-Mailer': 'OutreachPro/1.0',
+        'X-Entity-Ref-ID': uuidv4()
+      }
     }, {
       headers: { 'api-key': key },
       timeout: 15000
@@ -646,7 +716,7 @@ app.post('/api/test-email', async (req, res) => {
       brevoAccount: accountInfo.email,
       brevoCompany: accountInfo.companyName,
       brevoResponse: response.data,
-      note: 'Email sent successfully via Brevo. Check spam folder if not in inbox.'
+      note: 'Email sent successfully via Brevo. Check inbox (and spam) to confirm delivery.'
     });
   } catch (err) {
     res.status(500).json({
