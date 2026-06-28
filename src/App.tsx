@@ -282,6 +282,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchPage, setSearchPage] = useState(1);
+  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
   const [selectedProspects, setSelectedProspects] = useState<Set<number>>(new Set());
   const [importingProspects, setImportingProspects] = useState(false);
 
@@ -1245,6 +1246,66 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         ))}
                       </tbody>
                     </table>
+                  </div>
+                  {/* Pagination */}
+                  <div className="px-4 py-3 border-t border-slate-800/50 flex items-center justify-between">
+                    <span className="text-xs text-slate-500">
+                      Page {searchPage} · {searchResults.length} of {searchTotal} results
+                    </span>
+                    <div className="flex gap-2">
+                      <button
+                        disabled={searchPage <= 1 || searchLoadingMore}
+                        onClick={async () => {
+                          const newPage = searchPage - 1;
+                          setSearchLoadingMore(true);
+                          try {
+                            const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
+                              company: searchCompany || undefined,
+                              title: searchTitle || undefined,
+                              industry: searchIndustry || undefined,
+                              page: newPage,
+                              perPage: 25
+                            });
+                            setSearchResults(res.data.people || []);
+                            setSearchPage(newPage);
+                            setSelectedProspects(new Set());
+                          } catch (err: any) {
+                            alert(err.response?.data?.error || 'Failed to load page');
+                          } finally {
+                            setSearchLoadingMore(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold text-slate-400 hover:text-white hover:border-slate-700 transition-all disabled:opacity-40"
+                      >
+                        Previous
+                      </button>
+                      <button
+                        disabled={searchResults.length < 25 || searchLoadingMore}
+                        onClick={async () => {
+                          const newPage = searchPage + 1;
+                          setSearchLoadingMore(true);
+                          try {
+                            const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
+                              company: searchCompany || undefined,
+                              title: searchTitle || undefined,
+                              industry: searchIndustry || undefined,
+                              page: newPage,
+                              perPage: 25
+                            });
+                            setSearchResults(res.data.people || []);
+                            setSearchPage(newPage);
+                            setSelectedProspects(new Set());
+                          } catch (err: any) {
+                            alert(err.response?.data?.error || 'Failed to load page');
+                          } finally {
+                            setSearchLoadingMore(false);
+                          }
+                        }}
+                        className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold text-slate-400 hover:text-white hover:border-slate-700 transition-all disabled:opacity-40"
+                      >
+                        Next
+                      </button>
+                    </div>
                   </div>
                 </div>
               )}
