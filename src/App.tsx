@@ -276,15 +276,15 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   // Prospect Search states
   const [searchCompany, setSearchCompany] = useState('');
-  const [searchTitle, setSearchTitle] = useState('');
-  const [searchIndustry, setSearchIndustry] = useState('');
+  const [_searchTitle, _setSearchTitle] = useState('');
+  const [_searchIndustry, _setSearchIndustry] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchTotal, setSearchTotal] = useState(0);
-  const [searchPage, setSearchPage] = useState(1);
-  const [searchLoadingMore, setSearchLoadingMore] = useState(false);
+  const [_searchPage, _setSearchPage] = useState(1);
+  const [_searchLoadingMore, _setSearchLoadingMore] = useState(false);
   const [selectedProspects, setSelectedProspects] = useState<Set<number>>(new Set());
-  const [importingProspects, setImportingProspects] = useState(false);
+  const [_importingProspects, _setImportingProspects] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -1112,7 +1112,6 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         setSearchLoading(true);
                         setSearchResults([]);
                         setSelectedProspects(new Set());
-                        setSearchPage(1);
                         try {
                           const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
                             company: searchCompany || undefined
