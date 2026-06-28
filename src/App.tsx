@@ -210,7 +210,7 @@ function parseCSV(text: string): string[][] {
 
 const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // --- STATE ---
-  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'settings'>('campaign');
+  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'prospect' | 'settings'>('campaign');
   // ✅ Load accounts from localStorage cache on startup (survives page refresh)
   const [connectedAccounts, setConnectedAccounts] = useState<Account[]>(() => {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); } catch { return []; }
@@ -244,14 +244,17 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [newAppPassword, setNewAppPassword] = useState('');
 
   // Settings API states
-  const [settingsStatus, setSettingsStatus] = useState<{ BREVO_API_KEY: boolean; GEMINI_API_KEY: boolean }>({
+  const [settingsStatus, setSettingsStatus] = useState<{ BREVO_API_KEY: boolean; GEMINI_API_KEY: boolean; APOLLO_API_KEY: boolean }>({
     BREVO_API_KEY: false,
-    GEMINI_API_KEY: false
+    GEMINI_API_KEY: false,
+    APOLLO_API_KEY: false
   });
   const [tempBrevoKey, setTempBrevoKey] = useState('');
   const [tempGeminiKey, setTempGeminiKey] = useState('');
+  const [tempApolloKey, setTempApolloKey] = useState('');
   const [savingBrevo, setSavingBrevo] = useState(false);
   const [savingGemini, setSavingGemini] = useState(false);
+  const [savingApollo, setSavingApollo] = useState(false);
 
   // CSV Import mapping states
   const [csvHeaders, setCsvHeaders] = useState<string[]>([]);
@@ -270,6 +273,17 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [aiGenerating, setAiGenerating] = useState(false);
   const [aiResultSubject, setAiResultSubject] = useState('');
   const [aiResultBody, setAiResultBody] = useState('');
+
+  // Prospect Search states
+  const [searchCompany, setSearchCompany] = useState('');
+  const [searchTitle, setSearchTitle] = useState('');
+  const [searchIndustry, setSearchIndustry] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchPage, setSearchPage] = useState(1);
+  const [selectedProspects, setSelectedProspects] = useState<Set<number>>(new Set());
+  const [importingProspects, setImportingProspects] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const logEndRef = useRef<HTMLDivElement>(null);
@@ -315,22 +329,25 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
   };
 
-  const handleSaveSetting = async (key: 'BREVO_API_KEY' | 'GEMINI_API_KEY', value: string) => {
+  const handleSaveSetting = async (key: 'BREVO_API_KEY' | 'GEMINI_API_KEY' | 'APOLLO_API_KEY', value: string) => {
     if (!value) return alert('Please enter a key value');
     if (key === 'BREVO_API_KEY') setSavingBrevo(true);
-    else setSavingGemini(true);
+    else if (key === 'GEMINI_API_KEY') setSavingGemini(true);
+    else setSavingApollo(true);
     
     try {
       await axios.post(`${API_BASE_URL}/api/settings`, { key, value });
       alert('Key saved successfully!');
       if (key === 'BREVO_API_KEY') setTempBrevoKey('');
-      else setTempGeminiKey('');
+      else if (key === 'GEMINI_API_KEY') setTempGeminiKey('');
+      else setTempApolloKey('');
       fetchSettingsStatus();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save key');
     } finally {
       if (key === 'BREVO_API_KEY') setSavingBrevo(false);
-      else setSavingGemini(false);
+      else if (key === 'GEMINI_API_KEY') setSavingGemini(false);
+      else setSavingApollo(false);
     }
   };
 
@@ -577,6 +594,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'inbox' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <Inbox className="w-5 h-5" />
             <span className="hidden md:block font-medium">Unified Inbox</span>
+          </button>
+          <button onClick={() => setActiveTab('prospect')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'prospect' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <Users className="w-5 h-5" />
+            <span className="hidden md:block font-medium">Prospect Search</span>
           </button>
           <button onClick={() => setActiveTab('analytics')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'analytics' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <BarChart3 className="w-5 h-5" />
@@ -1045,6 +1066,199 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             </div>
           )}
 
+          {activeTab === 'prospect' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
+                <div>
+                  <h1 className="text-3xl font-bold text-white">Prospect Search</h1>
+                  <p className="text-slate-500 text-sm mt-1">Find leads on Apollo.io by company, title, or industry.</p>
+                </div>
+                {searchResults.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      const checkedProspects = searchResults.filter((_, i) => selectedProspects.has(i));
+                      if (checkedProspects.length === 0) return alert('Select at least one prospect first.');
+                      setImportingProspects(true);
+                      const existing = recipientText.split('\n').filter(l => l.trim());
+                      const newLines = checkedProspects.map(p => `${p.email},${p.name},${p.business}`);
+                      setRecipientText([...existing, ...newLines].join('\n'));
+                      setSelectedProspects(new Set());
+                      alert(`${checkedProspects.length} prospect(s) added to recipient list.`);
+                      setImportingProspects(false);
+                    }}
+                    disabled={importingProspects || selectedProspects.size === 0}
+                    className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
+                  >
+                    {importingProspects ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                    Add {selectedProspects.size} to Recipients
+                  </button>
+                )}
+              </div>
+
+              {/* Search Form */}
+              <div className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm mb-8">
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                  <div>
+                    <label className="text-xs font-semibold text-slate-400 block mb-1.5">Company Domain</label>
+                    <input
+                      value={searchCompany}
+                      onChange={e => setSearchCompany(e.target.value)}
+                      placeholder="e.g. google.com"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-400 block mb-1.5">Job Title</label>
+                    <input
+                      value={searchTitle}
+                      onChange={e => setSearchTitle(e.target.value)}
+                      placeholder="e.g. CEO, CTO"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  <div>
+                    <label className="text-xs font-semibold text-slate-400 block mb-1.5">Industry</label>
+                    <input
+                      value={searchIndustry}
+                      onChange={e => setSearchIndustry(e.target.value)}
+                      placeholder="e.g. software"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
+                    />
+                  </div>
+                  <div className="flex items-end">
+                    <button
+                      onClick={async () => {
+                        setSearchLoading(true);
+                        setSearchResults([]);
+                        setSelectedProspects(new Set());
+                        setSearchPage(1);
+                        try {
+                          const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
+                            company: searchCompany || undefined,
+                            title: searchTitle || undefined,
+                            industry: searchIndustry || undefined,
+                            page: 1,
+                            perPage: 25
+                          });
+                          setSearchResults(res.data.people || []);
+                          setSearchTotal(res.data.total || 0);
+                        } catch (err: any) {
+                          alert(err.response?.data?.error || 'Search failed');
+                        } finally {
+                          setSearchLoading(false);
+                        }
+                      }}
+                      disabled={searchLoading || (!searchCompany && !searchTitle && !searchIndustry)}
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
+                    >
+                      {searchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
+                      Search
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Results */}
+              {searchResults.length > 0 && (
+                <div className="bg-[#111113] rounded-2xl border border-slate-800/40 shadow-sm overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/30 flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-500 uppercase tracking-widest">
+                      {searchTotal} Prospects Found
+                    </span>
+                    <button
+                      onClick={() => {
+                        const allSelected = searchResults.every((_, i) => selectedProspects.has(i));
+                        if (allSelected) {
+                          setSelectedProspects(new Set());
+                        } else {
+                          setSelectedProspects(new Set(searchResults.map((_, i) => i)));
+                        }
+                      }}
+                      className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest"
+                    >
+                      {searchResults.every((_, i) => selectedProspects.has(i)) ? 'Deselect All' : 'Select All'}
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-slate-800/30 text-xs text-slate-500 uppercase tracking-wider">
+                          <th className="p-3 text-left w-10">
+                            <input
+                              type="checkbox"
+                              checked={searchResults.length > 0 && searchResults.every((_, i) => selectedProspects.has(i))}
+                              onChange={() => {
+                                const allSelected = searchResults.every((_, i) => selectedProspects.has(i));
+                                if (allSelected) setSelectedProspects(new Set());
+                                else setSelectedProspects(new Set(searchResults.map((_, i) => i)));
+                              }}
+                              className="accent-indigo-500"
+                            />
+                          </th>
+                          <th className="p-3 text-left font-semibold">Name</th>
+                          <th className="p-3 text-left font-semibold">Email</th>
+                          <th className="p-3 text-left font-semibold">Title</th>
+                          <th className="p-3 text-left font-semibold">Company</th>
+                          <th className="p-3 text-left font-semibold">Industry</th>
+                          <th className="p-3 text-left font-semibold">LinkedIn</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-800/20">
+                        {searchResults.map((prospect, i) => (
+                          <tr
+                            key={i}
+                            className={`hover:bg-white/[0.02] transition-all ${selectedProspects.has(i) ? 'bg-indigo-600/5' : ''}`}
+                          >
+                            <td className="p-3">
+                              <input
+                                type="checkbox"
+                                checked={selectedProspects.has(i)}
+                                onChange={() => {
+                                  const next = new Set(selectedProspects);
+                                  if (next.has(i)) next.delete(i);
+                                  else next.add(i);
+                                  setSelectedProspects(next);
+                                }}
+                                className="accent-indigo-500"
+                              />
+                            </td>
+                            <td className="p-3 font-medium text-slate-200">{prospect.name}</td>
+                            <td className="p-3 text-slate-400">{prospect.email}</td>
+                            <td className="p-3 text-slate-400">{prospect.title}</td>
+                            <td className="p-3 text-slate-400">{prospect.business}</td>
+                            <td className="p-3 text-slate-400">{prospect.company_industry}</td>
+                            <td className="p-3">
+                              {prospect.linkedin ? (
+                                <a
+                                  href={prospect.linkedin}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
+                                >
+                                  Profile
+                                </a>
+                              ) : (
+                                <span className="text-slate-600">—</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+
+              {!searchLoading && searchResults.length === 0 && (
+                <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">
+                  <Users className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">No results yet.</p>
+                  <p className="text-slate-600 text-xs mt-1">Enter search criteria above and click Search to find prospects.</p>
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'settings' && (
             <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div>
@@ -1079,6 +1293,36 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     >
                       {savingBrevo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <KeyRound className="w-3.5 h-3.5" />}
                       Save Brevo Key
+                    </button>
+                  </div>
+                </div>
+
+                {/* Apollo.io Settings Card */}
+                <div className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-bold text-white">Apollo.io API</h3>
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.APOLLO_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
+                      {settingsStatus.APOLLO_API_KEY ? 'Connected' : 'Disconnected'}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500">
+                    Used to enrich leads with company data (industry, size, location, LinkedIn) and search for new prospects.
+                  </p>
+                  <div className="space-y-2">
+                    <input
+                      type="password"
+                      placeholder="Paste Apollo.io API Key"
+                      value={tempApolloKey}
+                      onChange={e => setTempApolloKey(e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
+                    />
+                    <button
+                      onClick={() => handleSaveSetting('APOLLO_API_KEY', tempApolloKey)}
+                      disabled={savingApollo}
+                      className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg transition-all flex items-center justify-center gap-2"
+                    >
+                      {savingApollo ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Users className="w-3.5 h-3.5" />}
+                      Save Apollo Key
                     </button>
                   </div>
                 </div>

@@ -46,6 +46,24 @@ let _geminiKeyCache = null;
 let _geminiKeyCacheTime = 0;
 const GEMINI_KEY_TTL = 5 * 60 * 1000; // 5 minutes
 
+let _apolloKeyCache = null;
+let _apolloKeyCacheTime = 0;
+const APOLLO_KEY_TTL = 5 * 60 * 1000;
+
+async function getApolloKey() {
+  if (process.env.APOLLO_API_KEY) return process.env.APOLLO_API_KEY;
+  const now = Date.now();
+  if (_apolloKeyCache && (now - _apolloKeyCacheTime) < APOLLO_KEY_TTL) {
+    return _apolloKeyCache;
+  }
+  const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'APOLLO_API_KEY').maybeSingle();
+  if (error) throw new Error('Failed to fetch APOLLO_API_KEY from Supabase: ' + error.message);
+  _apolloKeyCache = data?.value || null;
+  _apolloKeyCacheTime = now;
+  console.log('Apollo API key refreshed from Supabase at', new Date().toISOString());
+  return _apolloKeyCache;
+}
+
 async function getGeminiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
 
@@ -191,11 +209,13 @@ app.get('/api/settings', async (req, res) => {
     
     const brevoSet = !!process.env.BREVO_API_KEY || data.some(d => d.key === 'BREVO_API_KEY');
     const geminiSet = !!process.env.GEMINI_API_KEY || data.some(d => d.key === 'GEMINI_API_KEY');
+    const apolloSet = !!process.env.APOLLO_API_KEY || data.some(d => d.key === 'APOLLO_API_KEY');
     
     res.json({
       settings: {
         BREVO_API_KEY: brevoSet,
-        GEMINI_API_KEY: geminiSet
+        GEMINI_API_KEY: geminiSet,
+        APOLLO_API_KEY: apolloSet
       }
     });
   } catch (err) {
@@ -209,7 +229,7 @@ app.post('/api/settings', async (req, res) => {
     return res.status(400).json({ error: 'Key and value are required' });
   }
   
-  if (key !== 'BREVO_API_KEY' && key !== 'GEMINI_API_KEY') {
+  if (key !== 'BREVO_API_KEY' && key !== 'GEMINI_API_KEY' && key !== 'APOLLO_API_KEY') {
     return res.status(400).json({ error: 'Invalid setting key' });
   }
   
@@ -223,6 +243,9 @@ app.post('/api/settings', async (req, res) => {
     } else if (key === 'GEMINI_API_KEY') {
       _geminiKeyCache = value;
       _geminiKeyCacheTime = Date.now();
+    } else if (key === 'APOLLO_API_KEY') {
+      _apolloKeyCache = value;
+      _apolloKeyCacheTime = Date.now();
     }
     
     res.json({ success: true });
@@ -820,10 +843,114 @@ app.post('/api/test-email', async (req, res) => {
 });
 
 // ============================================================
-// ENRICH (stub)
+// ENRICH — Apollo.io People Search
 // ============================================================
-app.post('/api/enrich', (req, res) => {
-  res.status(501).json({ error: 'Lead enrichment requires a Hunter.io API key. Set HUNTER_API_KEY in .env to enable.' });
+app.post('/api/enrich', async (req, res) => {
+  const { emails } = req.body;
+  if (!emails || !Array.isArray(emails) || emails.length === 0) {
+    return res.status(400).json({ error: 'Provide an array of emails to enrich' });
+  }
+
+  let apiKey;
+  try {
+    apiKey = await getApolloKey();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+
+  if (!apiKey) {
+    return res.status(501).json({ error: 'Apollo.io API key not configured. Add it in Settings or set APOLLO_API_KEY in .env' });
+  }
+
+  try {
+    const enrichedData = [];
+    for (const email of emails) {
+      if (!email) continue;
+      const response = await axios.post('https://api.apollo.io/api/v1/people/match', {
+        api_key: apiKey,
+        email
+      }, { timeout: 10000 });
+
+      const person = response.data?.person;
+      if (person) {
+        const org = person.organization || {};
+        enrichedData.push({
+          email: person.email || email,
+          name: [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown',
+          business: org.name || 'N/A',
+          title: person.title || '',
+          phone: person.phone || '',
+          linkedin: person.linkedin_url || '',
+          company_domain: org.domain || '',
+          company_industry: org.industry || '',
+          company_size: org.employee_count || '',
+          company_city: org.city || '',
+          company_state: org.state || ''
+        });
+      } else {
+        enrichedData.push({ email, name: 'Unknown', business: 'N/A', title: '', phone: '', linkedin: '' });
+      }
+    }
+
+    res.json({ enrichedData });
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('Apollo enrichment error:', detail);
+    res.status(500).json({ error: 'Apollo enrichment failed: ' + detail });
+  }
+});
+
+// Apollo People Search — search by criteria (company, title, etc.)
+app.post('/api/apollo/search', async (req, res) => {
+  const { company, title, industry, page = 1, perPage = 25 } = req.body;
+
+  let apiKey;
+  try {
+    apiKey = await getApolloKey();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+
+  if (!apiKey) {
+    return res.status(501).json({ error: 'Apollo.io API key not configured.' });
+  }
+
+  try {
+    const params = {
+      api_key: apiKey,
+      page,
+      per_page: perPage,
+      person_titles: title ? [title] : undefined,
+      organization_domains: company ? [company] : undefined,
+      organization_industry: industry ? [industry] : undefined
+    };
+    Object.keys(params).forEach(k => params[k] === undefined && delete params[k]);
+
+    const response = await axios.post('https://api.apollo.io/api/v1/mixed_people/search', params, { timeout: 15000 });
+    const people = (response.data?.people || []).map(person => ({
+      email: person.email || '',
+      name: [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown',
+      business: person.organization?.name || 'N/A',
+      title: person.title || '',
+      phone: person.phone || '',
+      linkedin: person.linkedin_url || '',
+      city: person.city || '',
+      state: person.state || '',
+      company_domain: person.organization?.domain || '',
+      company_industry: person.organization?.industry || ''
+    }));
+
+    res.json({
+      people,
+      total: response.data?.pagination?.total_entries || people.length,
+      page,
+      perPage
+    });
+  } catch (err) {
+    const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
+    console.error('Apollo search error:', detail);
+    res.status(500).json({ error: 'Apollo search failed: ' + detail });
+  }
 });
 
 // ============================================================
