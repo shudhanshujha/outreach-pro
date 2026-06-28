@@ -902,9 +902,10 @@ app.post('/api/enrich', async (req, res) => {
   }
 });
 
-// Apollo People Search — search by criteria (company, title, etc.)
+// Apollo People Search — enrich a single contact to show what's available
+// Full people search requires a paid Apollo plan; the free plan supports /v1/people/match (email → person)
 app.post('/api/apollo/search', async (req, res) => {
-  const { company, title, industry, page = 1, perPage = 25 } = req.body;
+  const { company } = req.body;
 
   let apiKey;
   try {
@@ -918,37 +919,39 @@ app.post('/api/apollo/search', async (req, res) => {
   }
 
   try {
-    const params = {
-      page,
-      per_page: perPage,
-      person_titles: title ? [title] : undefined,
-      organization_domains: company ? [company] : undefined,
-      organization_industry: industry ? [industry] : undefined
-    };
-    Object.keys(params).forEach(k => params[k] === undefined && delete params[k]);
-
-    const response = await axios.post('https://api.apollo.io/api/v1/mixed_people/search', params, {
-      headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
-      timeout: 15000
-    });
-    const people = (response.data?.people || []).map(person => ({
-      email: person.email || '',
-      name: [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown',
-      business: person.organization?.name || 'N/A',
-      title: person.title || '',
-      phone: person.phone || '',
-      linkedin: person.linkedin_url || '',
-      city: person.city || '',
-      state: person.state || '',
-      company_domain: person.organization?.domain || '',
-      company_industry: person.organization?.industry || ''
-    }));
+    // Enrich the organization by domain (free-tier friendly)
+    let orgInfo = null;
+    if (company) {
+      try {
+        const orgRes = await axios.post('https://api.apollo.io/api/v1/organizations/enrich', {
+          api_key: apiKey,
+          domain: company
+        }, { timeout: 10000 });
+        orgInfo = orgRes.data?.organization || null;
+      } catch (orgErr) {
+        console.warn('Organization enrich failed:', orgErr.message);
+      }
+    }
 
     res.json({
-      people,
-      total: response.data?.pagination?.total_entries || people.length,
-      page,
-      perPage
+      people: orgInfo ? [{
+        email: '',
+        name: '',
+        business: orgInfo.name || company || '',
+        title: '',
+        phone: '',
+        linkedin: orgInfo.linkedin_url || '',
+        city: orgInfo.city || '',
+        state: orgInfo.state || '',
+        company_domain: orgInfo.domain || company || '',
+        company_industry: orgInfo.industry || '',
+        company_size: orgInfo.employee_count || '',
+        company_phone: orgInfo.phone || '',
+        company_founded: orgInfo.founded_year || '',
+        company_revenue: orgInfo.estimated_revenue || ''
+      }] : [],
+      total: orgInfo ? 1 : 0,
+      note: orgInfo ? 'Organization found. Full people search requires a paid Apollo plan.' : 'No organization found for this domain.'
     });
   } catch (err) {
     const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;

@@ -1076,53 +1076,33 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </div>
                 {searchResults.length > 0 && (
                   <button
-                    onClick={async () => {
-                      const checkedProspects = searchResults.filter((_, i) => selectedProspects.has(i));
-                      if (checkedProspects.length === 0) return alert('Select at least one prospect first.');
-                      setImportingProspects(true);
-                      const existing = recipientText.split('\n').filter(l => l.trim());
-                      const newLines = checkedProspects.map(p => `${p.email},${p.name},${p.business}`);
-                      setRecipientText([...existing, ...newLines].join('\n'));
-                      setSelectedProspects(new Set());
-                      alert(`${checkedProspects.length} prospect(s) added to recipient list.`);
-                      setImportingProspects(false);
+                    onClick={() => {
+                      alert('Organization data found! To get individual leads:\n\n1. Go to Campaign tab\n2. Search for people on Apollo directly, or\n3. Use "Enrich Leads" with emails you already have\n\nFor full people search by title/industry, upgrade your Apollo plan.');
                     }}
-                    disabled={importingProspects || selectedProspects.size === 0}
-                    className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
+                    className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all text-sm"
                   >
-                    {importingProspects ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    Add {selectedProspects.size} to Recipients
+                    <Users className="w-4 h-4" />
+                    How to Get Individual Leads
                   </button>
                 )}
               </div>
 
               {/* Search Form */}
               <div className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm mb-8">
-                <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-4">
+                <div className="mb-4">
+                  <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-xl px-4 py-2.5">
+                    ⚡ Free Apollo plan: search by company domain to enrich organization data.
+                    Full people search (by title/industry) requires a paid plan.
+                    Use <strong>Enrich Leads</strong> on the Campaign tab to look up individual emails.
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
                   <div>
                     <label className="text-xs font-semibold text-slate-400 block mb-1.5">Company Domain</label>
                     <input
                       value={searchCompany}
                       onChange={e => setSearchCompany(e.target.value)}
                       placeholder="e.g. google.com"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-400 block mb-1.5">Job Title</label>
-                    <input
-                      value={searchTitle}
-                      onChange={e => setSearchTitle(e.target.value)}
-                      placeholder="e.g. CEO, CTO"
-                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
-                    />
-                  </div>
-                  <div>
-                    <label className="text-xs font-semibold text-slate-400 block mb-1.5">Industry</label>
-                    <input
-                      value={searchIndustry}
-                      onChange={e => setSearchIndustry(e.target.value)}
-                      placeholder="e.g. software"
                       className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2.5 text-sm text-slate-300 outline-none focus:border-indigo-500/50"
                     />
                   </div>
@@ -1135,21 +1115,20 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         setSearchPage(1);
                         try {
                           const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
-                            company: searchCompany || undefined,
-                            title: searchTitle || undefined,
-                            industry: searchIndustry || undefined,
-                            page: 1,
-                            perPage: 25
+                            company: searchCompany || undefined
                           });
                           setSearchResults(res.data.people || []);
                           setSearchTotal(res.data.total || 0);
+                          if (res.data.note) {
+                            alert(res.data.note);
+                          }
                         } catch (err: any) {
                           alert(err.response?.data?.error || 'Search failed');
                         } finally {
                           setSearchLoading(false);
                         }
                       }}
-                      disabled={searchLoading || (!searchCompany && !searchTitle && !searchIndustry)}
+                      disabled={searchLoading || !searchCompany}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white font-bold py-2.5 rounded-xl transition-all flex items-center justify-center gap-2 text-sm"
                     >
                       {searchLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Users className="w-4 h-4" />}
@@ -1196,16 +1175,16 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                               className="accent-indigo-500"
                             />
                           </th>
-                          <th className="p-3 text-left font-semibold">Name</th>
-                          <th className="p-3 text-left font-semibold">Email</th>
-                          <th className="p-3 text-left font-semibold">Title</th>
                           <th className="p-3 text-left font-semibold">Company</th>
+                          <th className="p-3 text-left font-semibold">Domain</th>
                           <th className="p-3 text-left font-semibold">Industry</th>
+                          <th className="p-3 text-left font-semibold">Size</th>
+                          <th className="p-3 text-left font-semibold">Location</th>
                           <th className="p-3 text-left font-semibold">LinkedIn</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-slate-800/20">
-                        {searchResults.map((prospect, i) => (
+                        {searchResults.map((org, i) => (
                           <tr
                             key={i}
                             className={`hover:bg-white/[0.02] transition-all ${selectedProspects.has(i) ? 'bg-indigo-600/5' : ''}`}
@@ -1223,15 +1202,15 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 className="accent-indigo-500"
                               />
                             </td>
-                            <td className="p-3 font-medium text-slate-200">{prospect.name}</td>
-                            <td className="p-3 text-slate-400">{prospect.email}</td>
-                            <td className="p-3 text-slate-400">{prospect.title}</td>
-                            <td className="p-3 text-slate-400">{prospect.business}</td>
-                            <td className="p-3 text-slate-400">{prospect.company_industry}</td>
+                            <td className="p-3 font-medium text-slate-200">{org.business || '—'}</td>
+                            <td className="p-3 text-slate-400">{org.company_domain || '—'}</td>
+                            <td className="p-3 text-slate-400">{org.company_industry || '—'}</td>
+                            <td className="p-3 text-slate-400">{org.company_size || '—'}</td>
+                            <td className="p-3 text-slate-400">{[org.city, org.state].filter(Boolean).join(', ') || '—'}</td>
                             <td className="p-3">
-                              {prospect.linkedin ? (
+                              {org.linkedin ? (
                                 <a
-                                  href={prospect.linkedin}
+                                  href={org.linkedin}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className="text-indigo-400 hover:text-indigo-300 text-xs font-medium"
@@ -1247,66 +1226,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       </tbody>
                     </table>
                   </div>
-                  {/* Pagination */}
-                  <div className="px-4 py-3 border-t border-slate-800/50 flex items-center justify-between">
-                    <span className="text-xs text-slate-500">
-                      Page {searchPage} · {searchResults.length} of {searchTotal} results
-                    </span>
-                    <div className="flex gap-2">
-                      <button
-                        disabled={searchPage <= 1 || searchLoadingMore}
-                        onClick={async () => {
-                          const newPage = searchPage - 1;
-                          setSearchLoadingMore(true);
-                          try {
-                            const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
-                              company: searchCompany || undefined,
-                              title: searchTitle || undefined,
-                              industry: searchIndustry || undefined,
-                              page: newPage,
-                              perPage: 25
-                            });
-                            setSearchResults(res.data.people || []);
-                            setSearchPage(newPage);
-                            setSelectedProspects(new Set());
-                          } catch (err: any) {
-                            alert(err.response?.data?.error || 'Failed to load page');
-                          } finally {
-                            setSearchLoadingMore(false);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold text-slate-400 hover:text-white hover:border-slate-700 transition-all disabled:opacity-40"
-                      >
-                        Previous
-                      </button>
-                      <button
-                        disabled={searchResults.length < 25 || searchLoadingMore}
-                        onClick={async () => {
-                          const newPage = searchPage + 1;
-                          setSearchLoadingMore(true);
-                          try {
-                            const res = await axios.post(`${API_BASE_URL}/api/apollo/search`, {
-                              company: searchCompany || undefined,
-                              title: searchTitle || undefined,
-                              industry: searchIndustry || undefined,
-                              page: newPage,
-                              perPage: 25
-                            });
-                            setSearchResults(res.data.people || []);
-                            setSearchPage(newPage);
-                            setSelectedProspects(new Set());
-                          } catch (err: any) {
-                            alert(err.response?.data?.error || 'Failed to load page');
-                          } finally {
-                            setSearchLoadingMore(false);
-                          }
-                        }}
-                        className="px-3 py-1.5 bg-slate-900 border border-slate-800 rounded-lg text-xs font-bold text-slate-400 hover:text-white hover:border-slate-700 transition-all disabled:opacity-40"
-                      >
-                        Next
-                      </button>
+                  {searchTotal > 0 && (
+                    <div className="px-4 py-3 border-t border-slate-800/50 text-center">
+                      <span className="text-xs text-slate-500">
+                        1 organization found · Full people search requires a paid Apollo plan
+                      </span>
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
 
