@@ -968,10 +968,35 @@ app.use((req, res) => {
 });
 
 // ============================================================
+// STARTUP ACCOUNT SEED
+// Ensures Gmail accounts + app passwords are always in Supabase.
+// Set SEED_ACCOUNTS env var on Render as a JSON array, e.g.:
+// [{"email":"x@gmail.com","appPassword":"xxxx xxxx xxxx xxxx"}]
+// ============================================================
+async function seedAccounts() {
+  const raw = process.env.SEED_ACCOUNTS;
+  if (!raw) return;
+  let accounts;
+  try { accounts = JSON.parse(raw); } catch (e) { console.warn('SEED_ACCOUNTS is not valid JSON'); return; }
+  for (const acc of accounts) {
+    if (!acc.email || !acc.appPassword) continue;
+    const { error } = await supabase.from('accounts').upsert(
+      { email: acc.email, appPassword: acc.appPassword },
+      { onConflict: 'email' }
+    );
+    if (error) console.error('Seed failed for', acc.email, error.message);
+    else console.log('Seeded account:', acc.email);
+  }
+}
+
+// ============================================================
 // START
 // ============================================================
 if (process.env.NODE_ENV !== 'production' || process.env.RENDER) {
-  app.listen(PORT, () => console.log('Backend running on port ' + PORT));
+  app.listen(PORT, async () => {
+    console.log('Backend running on port ' + PORT);
+    await seedAccounts();
+  });
 }
 
 module.exports = app;
