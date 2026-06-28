@@ -13,7 +13,7 @@ import TermsOfService from './TermsOfService';
 // --- TYPES ---
 interface Account { email: string; }
 interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestamp: string; }
-interface EmailReply { subject: string; from: string; date: string; uid: number; }
+interface EmailMessage { uid: number; subject: string; from: string; fromName: string; date: string; seen: boolean; }
 interface FollowUp { delayDays: number; subject: string; body: string; }
 
 const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
@@ -85,8 +85,16 @@ const Dashboard: React.FC = () => {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [status, setStatus] = useState<'idle' | 'running' | 'completed'>('idle');
   const [isEnriching, setIsEnriching] = useState(false);
-  const [replies, setReplies] = useState<EmailReply[]>([]);
+
+  // Inbox state
+  const [inboxMessages, setInboxMessages] = useState<EmailMessage[]>([]);
   const [loadingInbox, setLoadingInbox] = useState(false);
+  const [selectedInboxAccount, setSelectedInboxAccount] = useState<string>('');
+  const [selectedMessage, setSelectedMessage] = useState<EmailMessage | null>(null);
+  const [messageBody, setMessageBody] = useState<{ html: string | null; text: string | null } | null>(null);
+  const [loadingBody, setLoadingBody] = useState(false);
+  const [mobileShowReading, setMobileShowReading] = useState(false);
+
   const [showAddForm, setShowAddForm] = useState(false);
   const [newEmail, setNewEmail] = useState('');
   const [newAppPassword, setNewAppPassword] = useState('');
@@ -370,14 +378,40 @@ const Dashboard: React.FC = () => {
     setFollowUps(newFollowUps);
   };
 
-  const fetchInbox = async () => {
-    if (connectedAccounts.length === 0) return alert('Connect an account first');
+  const fetchInboxForAccount = async (accountEmail: string) => {
+    if (!accountEmail) return;
     setLoadingInbox(true);
+    setSelectedMessage(null);
+    setMessageBody(null);
+    setInboxMessages([]);
     try {
-      const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: { user: connectedAccounts[0].email } });
-      setReplies(res.data.messages);
-    } catch (err) { alert('Failed to fetch inbox'); }
-    finally { setLoadingInbox(false); }
+      const res = await axios.post(`${API_BASE_URL}/api/inbox`, { account: { user: accountEmail } });
+      setInboxMessages(res.data.messages || []);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to fetch inbox');
+    } finally {
+      setLoadingInbox(false);
+    }
+  };
+
+  const fetchMessageBody = async (msg: EmailMessage) => {
+    setSelectedMessage(msg);
+    setMessageBody(null);
+    setLoadingBody(true);
+    setMobileShowReading(true);
+    // Mark as seen locally
+    setInboxMessages(prev => prev.map(m => m.uid === msg.uid ? { ...m, seen: true } : m));
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/inbox/body`, {
+        accountEmail: selectedInboxAccount,
+        uid: msg.uid
+      });
+      setMessageBody(res.data);
+    } catch (err: any) {
+      setMessageBody({ html: null, text: 'Failed to load message body.' });
+    } finally {
+      setLoadingBody(false);
+    }
   };
 
   return (
@@ -636,42 +670,212 @@ const Dashboard: React.FC = () => {
           )}
 
           {activeTab === 'inbox' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
-               <header className="flex justify-between items-end">
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              {/* Header */}
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
                 <div>
-                  <h1 className="text-3xl font-bold text-white mb-2 text-white">Unified Inbox</h1>
-                  <p className="text-slate-500">Replies from your connected accounts.</p>
+                  <h1 className="text-3xl font-bold text-white">Unified Inbox</h1>
+                  <p className="text-slate-500 text-sm mt-1">Read replies from all your connected accounts.</p>
                 </div>
-                <button onClick={fetchInbox} disabled={loadingInbox} className="bg-indigo-600 text-white px-6 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-50">
+                <button
+                  onClick={() => selectedInboxAccount && fetchInboxForAccount(selectedInboxAccount)}
+                  disabled={loadingInbox || !selectedInboxAccount}
+                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
+                >
                   {loadingInbox ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-                  Check for Replies
+                  Refresh
                 </button>
-              </header>
-              <div className="bg-[#111113] rounded-3xl border border-slate-800/40 overflow-hidden shadow-xl">
-                {replies.length === 0 ? (
-                  <div className="p-20 text-center flex flex-col items-center gap-4">
-                    <Inbox className="w-12 h-12 text-slate-800" />
-                    <p className="text-slate-600 font-medium">No replies found.</p>
-                  </div>
-                ) : (
-                  <div className="divide-y divide-slate-800/50">
-                    {replies.map((reply, i) => (
-                      <div key={i} className="p-6 flex items-center gap-6 hover:bg-white/[0.02] cursor-pointer group">
-                         <div className="w-10 h-10 rounded-full bg-indigo-500/10 flex items-center justify-center group-hover:bg-indigo-500/20 transition-all">
-                            <Mail className="w-5 h-5 text-indigo-400" />
-                         </div>
-                         <div className="flex-1">
-                            <div className="flex justify-between items-center mb-1">
-                               <h3 className="font-bold text-white">{reply.from}</h3>
-                               <span className="text-[10px] text-slate-600 uppercase font-bold">{new Date(reply.date).toLocaleDateString()}</span>
-                            </div>
-                            <p className="text-sm text-slate-400">{reply.subject}</p>
-                         </div>
-                      </div>
+              </div>
+
+              {/* Account Switcher */}
+              {connectedAccounts.length === 0 ? (
+                <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">
+                  <Inbox className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">No accounts connected.</p>
+                  <p className="text-slate-600 text-xs mt-1">Add a Gmail account in the Campaign tab to get started.</p>
+                </div>
+              ) : (
+                <>
+                  <div className="flex gap-2 mb-4 overflow-x-auto pb-1">
+                    {connectedAccounts.map((acc) => (
+                      <button
+                        key={acc.email}
+                        onClick={() => {
+                          setSelectedInboxAccount(acc.email);
+                          fetchInboxForAccount(acc.email);
+                        }}
+                        className={`flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-bold whitespace-nowrap transition-all border ${
+                          selectedInboxAccount === acc.email
+                            ? 'bg-indigo-600/15 text-indigo-300 border-indigo-500/30'
+                            : 'bg-slate-900 text-slate-500 border-slate-800 hover:border-slate-700 hover:text-slate-300'
+                        }`}
+                      >
+                        <div className="w-5 h-5 rounded-full bg-indigo-500/20 flex items-center justify-center text-[9px] font-black text-indigo-300">
+                          {acc.email[0].toUpperCase()}
+                        </div>
+                        {acc.email}
+                      </button>
                     ))}
                   </div>
-                )}
-              </div>
+
+                  {/* Two-pane inbox layout */}
+                  {!selectedInboxAccount ? (
+                    <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">
+                      <Mail className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                      <p className="text-slate-500 font-medium">Select an account above to load its inbox.</p>
+                    </div>
+                  ) : (
+                    <div className="bg-[#111113] border border-slate-800/40 rounded-2xl overflow-hidden shadow-xl" style={{ height: 'calc(100vh - 260px)', minHeight: '500px' }}>
+                      <div className="flex h-full">
+                        {/* Message List */}
+                        <div className={`flex flex-col border-r border-slate-800/50 ${
+                          mobileShowReading ? 'hidden md:flex' : 'flex'
+                        } w-full md:w-[340px] lg:w-[380px] flex-shrink-0`}>
+                          <div className="px-4 py-3 border-b border-slate-800/50 bg-slate-900/30">
+                            <span className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                              {loadingInbox ? 'Loading...' : `${inboxMessages.length} Messages`}
+                            </span>
+                          </div>
+                          <div className="flex-1 overflow-y-auto">
+                            {loadingInbox ? (
+                              <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-600">
+                                <Loader2 className="w-6 h-6 animate-spin" />
+                                <span className="text-xs">Fetching inbox via IMAP...</span>
+                              </div>
+                            ) : inboxMessages.length === 0 ? (
+                              <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-600 p-8 text-center">
+                                <Inbox className="w-8 h-8" />
+                                <p className="text-sm">No messages found.</p>
+                              </div>
+                            ) : (
+                              inboxMessages.map((msg) => {
+                                const initials = (msg.fromName || msg.from).slice(0, 2).toUpperCase();
+                                const isSelected = selectedMessage?.uid === msg.uid;
+                                const formattedDate = (() => {
+                                  const d = new Date(msg.date);
+                                  const now = new Date();
+                                  const isToday = d.toDateString() === now.toDateString();
+                                  return isToday
+                                    ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                                    : d.toLocaleDateString([], { month: 'short', day: 'numeric' });
+                                })();
+                                return (
+                                  <button
+                                    key={msg.uid}
+                                    onClick={() => fetchMessageBody(msg)}
+                                    className={`w-full text-left px-4 py-3.5 border-b border-slate-800/30 transition-all group ${
+                                      isSelected
+                                        ? 'bg-indigo-600/10 border-l-2 border-l-indigo-500'
+                                        : 'hover:bg-white/[0.02] border-l-2 border-l-transparent'
+                                    }`}
+                                  >
+                                    <div className="flex items-start gap-3">
+                                      <div className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500/30 to-purple-500/30 flex items-center justify-center text-[11px] font-black text-indigo-300 flex-shrink-0 mt-0.5">
+                                        {initials}
+                                      </div>
+                                      <div className="flex-1 min-w-0">
+                                        <div className="flex items-center justify-between gap-2 mb-0.5">
+                                          <span className={`text-xs truncate ${
+                                            !msg.seen ? 'font-bold text-white' : 'font-medium text-slate-400'
+                                          }`}>
+                                            {msg.fromName || msg.from}
+                                          </span>
+                                          <span className="text-[10px] text-slate-600 flex-shrink-0">{formattedDate}</span>
+                                        </div>
+                                        <p className={`text-xs truncate ${
+                                          !msg.seen ? 'text-slate-300 font-semibold' : 'text-slate-500'
+                                        }`}>
+                                          {msg.subject}
+                                        </p>
+                                        {!msg.seen && (
+                                          <div className="mt-1 w-1.5 h-1.5 rounded-full bg-indigo-400 inline-block" />
+                                        )}
+                                      </div>
+                                    </div>
+                                  </button>
+                                );
+                              })
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Reading Pane */}
+                        <div className={`flex flex-col flex-1 min-w-0 ${
+                          !mobileShowReading ? 'hidden md:flex' : 'flex'
+                        }`}>
+                          {!selectedMessage ? (
+                            <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-700">
+                              <Mail className="w-12 h-12" />
+                              <p className="text-sm text-slate-500">Select a message to read it</p>
+                            </div>
+                          ) : (
+                            <>
+                              {/* Reading pane header */}
+                              <div className="px-6 py-4 border-b border-slate-800/50 bg-slate-900/20">
+                                <button
+                                  onClick={() => { setMobileShowReading(false); }}
+                                  className="md:hidden flex items-center gap-1.5 text-xs text-indigo-400 mb-3 font-bold"
+                                >
+                                  ← Back to inbox
+                                </button>
+                                <h2 className="text-base font-bold text-white mb-2 leading-snug">{selectedMessage.subject}</h2>
+                                <div className="flex items-center justify-between flex-wrap gap-2">
+                                  <div className="flex items-center gap-2">
+                                    <div className="w-7 h-7 rounded-full bg-gradient-to-br from-indigo-500/30 to-purple-500/30 flex items-center justify-center text-[10px] font-black text-indigo-300">
+                                      {(selectedMessage.fromName || selectedMessage.from).slice(0, 2).toUpperCase()}
+                                    </div>
+                                    <div>
+                                      <p className="text-xs font-bold text-slate-200">{selectedMessage.fromName}</p>
+                                      <p className="text-[10px] text-slate-500">{selectedMessage.from}</p>
+                                    </div>
+                                  </div>
+                                  <div className="flex items-center gap-3">
+                                    <span className="text-[10px] text-slate-600">
+                                      {new Date(selectedMessage.date).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                                    </span>
+                                    <a
+                                      href={`mailto:${selectedMessage.from}?subject=Re: ${encodeURIComponent(selectedMessage.subject)}`}
+                                      className="flex items-center gap-1.5 bg-indigo-600/10 hover:bg-indigo-600/20 text-indigo-400 border border-indigo-500/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                                    >
+                                      <Mail className="w-3.5 h-3.5" /> Reply
+                                    </a>
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Body */}
+                              <div className="flex-1 overflow-hidden">
+                                {loadingBody ? (
+                                  <div className="flex flex-col items-center justify-center h-full gap-3 text-slate-600">
+                                    <Loader2 className="w-6 h-6 animate-spin" />
+                                    <span className="text-xs">Loading message...</span>
+                                  </div>
+                                ) : messageBody?.html ? (
+                                  <iframe
+                                    srcDoc={`<!DOCTYPE html><html><head><meta charset="utf-8"><style>body{margin:0;padding:20px 24px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.6;color:#cbd5e1;background:#0f0f11;}a{color:#818cf8;}img{max-width:100%;}</style></head><body>${messageBody.html}</body></html>`}
+                                    className="w-full h-full border-0"
+                                    sandbox="allow-same-origin"
+                                    title="Email content"
+                                  />
+                                ) : messageBody?.text ? (
+                                  <div className="p-6 overflow-y-auto h-full">
+                                    <pre className="text-sm text-slate-400 whitespace-pre-wrap font-sans leading-relaxed">{messageBody.text}</pre>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col items-center justify-center h-full gap-2 text-slate-600 p-8 text-center">
+                                    <FileText className="w-8 h-8" />
+                                    <p className="text-sm">No content could be loaded for this message.</p>
+                                  </div>
+                                )}
+                              </div>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </>
+              )}
             </div>
           )}
 

@@ -630,27 +630,39 @@ app.post('/api/inbox', async (req, res) => {
       host: 'imap.gmail.com',
       port: 993,
       secure: true,
-      auth: {
-        user: account.user,
-        pass: dbAccount.appPassword
-      },
+      auth: { user: account.user, pass: dbAccount.appPassword },
       logger: false
     });
 
     await imap.connect();
-    await imap.mailboxOpen('INBOX');
+    const mailbox = await imap.mailboxOpen('INBOX');
+    const total = mailbox.exists || 0;
 
     const messages = [];
-    for await (const msg of imap.fetch('1:*', { envelope: true, uid: true })) {
-      const from = msg.envelope.from?.[0];
-      if (!from) continue;
-      messages.push({
-        subject: msg.envelope.subject || '(No Subject)',
-        from: from.address,
-        date: msg.envelope.date ? new Date(msg.envelope.date).toISOString() : new Date().toISOString(),
-        uid: msg.uid
-      });
-      if (messages.length >= 50) break;
+    if (total > 0) {
+      // Fetch the latest 50 messages (newest first via reverse sequence range)
+      const start = Math.max(1, total - 49);
+      const range = `${start}:${total}`;
+      for await (const msg of imap.fetch(range, { envelope: true, uid: true, flags: true })) {
+        const from = msg.envelope.from?.[0];
+        if (!from) continue;
+        // Build a readable sender name
+        const fromName = [from.name, from.address]
+          .filter(Boolean)
+          .join(' ')
+          .replace(/^"|"$/g, '')
+          .trim() || from.address;
+        messages.push({
+          uid: msg.uid,
+          subject: msg.envelope.subject || '(No Subject)',
+          from: from.address,
+          fromName,
+          date: msg.envelope.date ? new Date(msg.envelope.date).toISOString() : new Date().toISOString(),
+          seen: msg.flags?.has('\\Seen') || false
+        });
+      }
+      // Sort newest first
+      messages.sort((a, b) => new Date(b.date) - new Date(a.date));
     }
 
     await imap.logout();
@@ -660,6 +672,86 @@ app.post('/api/inbox', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+// Fetch the full body of a single message by UID
+app.post('/api/inbox/body', async (req, res) => {
+  const { accountEmail, uid } = req.body;
+  if (!accountEmail || !uid) return res.status(400).json({ error: 'accountEmail and uid are required' });
+
+  try {
+    const { data: dbAccount, error } = await supabase.from('accounts').select('*').eq('email', accountEmail).maybeSingle();
+    if (error) throw error;
+    if (!dbAccount || !dbAccount.appPassword) {
+      return res.status(404).json({ error: 'Account not found or no app password set.' });
+    }
+
+    const imap = new ImapFlow({
+      host: 'imap.gmail.com',
+      port: 993,
+      secure: true,
+      auth: { user: accountEmail, pass: dbAccount.appPassword },
+      logger: false
+    });
+
+    await imap.connect();
+    await imap.mailboxOpen('INBOX');
+
+    let htmlBody = null;
+    let textBody = null;
+
+    // Fetch the raw source for this UID
+    for await (const msg of imap.fetch({ uid: String(uid) }, { source: true }, { uid: true })) {
+      if (!msg.source) continue;
+      const raw = msg.source.toString();
+
+      // Extract HTML part from multipart or direct HTML
+      const htmlMatch = raw.match(/Content-Type:\s*text\/html[^\n]*\n(?:[^\n]+\n)*?\n([\s\S]*?)(?=--|\z)/i);
+      const textMatch = raw.match(/Content-Type:\s*text\/plain[^\n]*\n(?:[^\n]+\n)*?\n([\s\S]*?)(?=--|\z)/i);
+
+      if (htmlMatch) {
+        htmlBody = decodeIMAPBody(htmlMatch[1].trim());
+      }
+      if (textMatch) {
+        textBody = decodeIMAPBody(textMatch[1].trim());
+      }
+
+      // If no multipart found, treat entire body as text
+      if (!htmlBody && !textBody) {
+        const bodyStart = raw.indexOf('\r\n\r\n');
+        if (bodyStart !== -1) {
+          textBody = raw.slice(bodyStart + 4).trim();
+        }
+      }
+    }
+
+    // Mark as seen
+    try {
+      await imap.messageFlagsAdd({ uid: String(uid) }, ['\\Seen'], { uid: true });
+    } catch (_) { /* non-critical */ }
+
+    await imap.logout();
+    res.json({ html: htmlBody, text: textBody });
+  } catch (err) {
+    console.error('Inbox body fetch error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Decode quoted-printable or base64 encoded IMAP body segments
+function decodeIMAPBody(raw) {
+  try {
+    // Base64
+    if (/^[A-Za-z0-9+/\r\n]+=*$/.test(raw.replace(/\s/g, '')) && raw.length > 40) {
+      return Buffer.from(raw.replace(/\s/g, ''), 'base64').toString('utf-8');
+    }
+    // Quoted-printable: decode =XX hex sequences and soft line breaks
+    return raw
+      .replace(/=\r?\n/g, '')
+      .replace(/=([0-9A-Fa-f]{2})/g, (_, h) => String.fromCharCode(parseInt(h, 16)));
+  } catch (_) {
+    return raw;
+  }
+}
 
 // ============================================================
 // TEST EMAIL (diagnostic)
