@@ -867,9 +867,11 @@ app.post('/api/enrich', async (req, res) => {
     for (const email of emails) {
       if (!email) continue;
       const response = await axios.post('https://api.apollo.io/api/v1/people/match', {
-        api_key: apiKey,
         email
-      }, { timeout: 10000 });
+      }, {
+        headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
+        timeout: 10000
+      });
 
       const person = response.data?.person;
       if (person) {
@@ -917,7 +919,6 @@ app.post('/api/apollo/search', async (req, res) => {
 
   try {
     const params = {
-      api_key: apiKey,
       page,
       per_page: perPage,
       person_titles: title ? [title] : undefined,
@@ -926,7 +927,10 @@ app.post('/api/apollo/search', async (req, res) => {
     };
     Object.keys(params).forEach(k => params[k] === undefined && delete params[k]);
 
-    const response = await axios.post('https://api.apollo.io/api/v1/mixed_people/search', params, { timeout: 15000 });
+    const response = await axios.post('https://api.apollo.io/api/v1/mixed_people/search', params, {
+      headers: { 'X-Api-Key': apiKey, 'Content-Type': 'application/json' },
+      timeout: 15000
+    });
     const people = (response.data?.people || []).map(person => ({
       email: person.email || '',
       name: [person.first_name, person.last_name].filter(Boolean).join(' ') || 'Unknown',
