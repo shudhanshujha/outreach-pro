@@ -25,8 +25,8 @@ dist-ssr
 
 .vercel
 .env
-.env.local
-.env.vercel
+.env.*
+!/.env.example
 *.db
 api/package-lock.json
 credentials.txt
