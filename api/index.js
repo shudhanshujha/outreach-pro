@@ -461,6 +461,15 @@ app.get('/api/t/:id.png', async (req, res) => {
     if (emailData && !emailData.opened_at) {
       const { error: updateErr } = await supabase.from('sent_emails').update({ opened_at: new Date().toISOString() }).eq('id', req.params.id);
       if (updateErr) throw updateErr;
+      const fuSet = _campaignFollowUpEmails[emailData.campaign_id];
+      const shouldFollowUp = fuSet && fuSet.has(emailData.recipient_email.toLowerCase());
+      if (!shouldFollowUp) {
+        console.log(`[Tracking] Skipping follow-ups for ${emailData.recipient_email} (not selected)`);
+        const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
+        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache, no-store' });
+        res.end(pixel);
+        return;
+      }
       const { data: followUps } = await supabase.from('follow_ups').select('*').eq('campaign_id', emailData.campaign_id);
       for (const fu of followUps || []) {
         const scheduledTime = new Date();
@@ -540,12 +549,13 @@ setInterval(runBackgroundWorker, 60 * 1000);
 let activeLogs = [];
 let activeStatus = 'idle';
 let activeStop = false;
+const _campaignFollowUpEmails = {}; // campaignId → Set of recipient emails
 
 app.post('/api/send', async (req, res) => {
   try {
     if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
 
-    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4() } = req.body;
+    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4(), followUpEmails = [] } = req.body;
 
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
     return res.status(400).json({ error: 'No recipients provided' });
@@ -578,6 +588,10 @@ app.post('/api/send', async (req, res) => {
         if (fuErr) throw fuErr;
       }
 
+      _campaignFollowUpEmails[campaignId] = new Set(followUpEmails.map(e => e.toLowerCase()));
+      const followUpCount = followUpEmails.length;
+      activeLogs.push({ text: `Follow-ups enabled for ${followUpCount} of ${recipients.length} recipients`, type: 'info', timestamp: new Date() });
+
       for (let i = 0; i < recipients.length; i++) {
         if (activeStop) {
           activeLogs.push({ text: 'Campaign stopped by user.', type: 'info', timestamp: new Date() });
@@ -600,8 +614,9 @@ app.post('/api/send', async (req, res) => {
         } catch (_) { /* skip unsub check on error */ }
 
         const accEmail = accountEmails[i % accountEmails.length].user;
+        const hasFollowUps = _campaignFollowUpEmails[campaignId]?.has(recipient.email.toLowerCase());
 
-        activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + '...', timestamp: new Date() });
+        activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + (hasFollowUps ? ' [follow-ups on]' : '') + '...', timestamp: new Date() });
 
         try {
           const sentId = uuidv4();
