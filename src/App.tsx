@@ -4,7 +4,7 @@ import {
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
   Inbox, ListTree, Clock, KeyRound, CheckCircle2, Trash2, Square, Plus, X,
-  Upload, Download, Eye, EyeOff, LogOut, Lock, Play
+  Upload, Download, Eye, EyeOff, LogOut, Lock, Play, AlertTriangle, Activity
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -299,6 +299,27 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const [personalizedData, setPersonalizedData] = useState<Record<string, { subject: string; body: string }>>({});
 
+  // Spam Score Checker
+  const [showSpamModal, setShowSpamModal] = useState(false);
+  const [checkingSpam, setCheckingSpam] = useState(false);
+  const [spamResult, setSpamResult] = useState<any>(null);
+
+  // AI Follow-up Generator
+  const [generatingFollowUp, setGeneratingFollowUp] = useState(false);
+  const [generatingFollowUpIdx, setGeneratingFollowUpIdx] = useState<number | null>(null);
+
+  // Reply Detection
+  const [detectingReplies, setDetectingReplies] = useState(false);
+  const [detectedReplies, setDetectedReplies] = useState<any[]>([]);
+  const [showRepliesModal, setShowRepliesModal] = useState(false);
+
+  // Delivery Health
+  const [deliveryHealth, setDeliveryHealth] = useState<any>(null);
+  const [loadingHealth, setLoadingHealth] = useState(false);
+
+  // Export
+  const [exportingCampaignId, setExportingCampaignId] = useState<string | null>(null);
+
   // Campaign History state
   const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -538,6 +559,98 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       alert(err.response?.data?.error || 'Personalization failed');
     } finally {
       setPersonalizing(false);
+    }
+  };
+
+  const handleCheckSpam = async () => {
+    setCheckingSpam(true);
+    setSpamResult(null);
+    setShowSpamModal(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/check-spam`, { subject, body });
+      setSpamResult(res.data);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Spam check failed');
+      setShowSpamModal(false);
+    } finally {
+      setCheckingSpam(false);
+    }
+  };
+
+  const handleGenerateFollowUp = async (index: number) => {
+    setGeneratingFollowUp(true);
+    setGeneratingFollowUpIdx(index);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/ai/generate-followup`, {
+        originalSubject: subject,
+        originalBody: body,
+        pitch: pitch.trim() || subject,
+        recipientName: '{{name}}',
+        recipientBusiness: '{{business}}',
+        delayDays: followUps[index].delayDays
+      });
+      const fu = res.data.followUp;
+      const newFollowUps = [...followUps];
+      newFollowUps[index] = { ...newFollowUps[index], subject: fu.subject, body: fu.body };
+      setFollowUps(newFollowUps);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to generate follow-up');
+    } finally {
+      setGeneratingFollowUp(false);
+      setGeneratingFollowUpIdx(null);
+    }
+  };
+
+  const handleDetectReplies = async () => {
+    setDetectingReplies(true);
+    setShowRepliesModal(true);
+    try {
+      const res = await axios.post(`${API_BASE_URL}/api/detect-replies`);
+      setDetectedReplies(res.data.replies || []);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Reply detection failed');
+      setShowRepliesModal(false);
+    } finally {
+      setDetectingReplies(false);
+    }
+  };
+
+  const handleTagLead = async (email: string, tag: string) => {
+    try {
+      await axios.post(`${API_BASE_URL}/api/leads/${encodeURIComponent(email)}/tag`, { tag });
+      fetchCampaignHistory();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to tag lead');
+    }
+  };
+
+  const handleExportCampaign = async (campaignId: string) => {
+    setExportingCampaignId(campaignId);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/campaigns/${campaignId}/export`, { responseType: 'blob' });
+      const url = URL.createObjectURL(new Blob([res.data], { type: 'text/csv' }));
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `campaign-${campaignId.slice(0, 8)}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Export failed');
+    } finally {
+      setExportingCampaignId(null);
+    }
+  };
+
+  const handleLoadDeliveryHealth = async () => {
+    setLoadingHealth(true);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/delivery-health`);
+      setDeliveryHealth(res.data.accounts || {});
+    } catch (err: any) {
+      alert('Failed to load delivery health');
+    } finally {
+      setLoadingHealth(false);
     }
   };
 
@@ -901,21 +1014,31 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </section>
 
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
-                  <div className="flex justify-between items-center mb-6">
+                    <div className="flex justify-between items-center mb-6">
                     <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                       <FileText className="w-4 h-4" /> Initial Email
                     </h2>
-                    <button 
-                      onClick={() => {
-                        setAiResultSubject('');
-                        setAiResultBody('');
-                        setShowAiModal(true);
-                      }} 
-                      className="text-xs flex items-center gap-2 font-bold text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all"
-                    >
-                      <Sparkles className="w-3.5 h-3.5" />
-                      Write with AI
-                    </button>
+                    <div className="flex gap-2">
+                      <button 
+                        onClick={handleCheckSpam}
+                        disabled={!body.trim()}
+                        className="text-xs flex items-center gap-2 font-bold text-amber-400 bg-amber-500/10 px-3 py-1.5 rounded-lg border border-amber-500/20 hover:bg-amber-500/20 transition-all disabled:opacity-50"
+                      >
+                        <AlertTriangle className="w-3.5 h-3.5" />
+                        Check Spam
+                      </button>
+                      <button 
+                        onClick={() => {
+                          setAiResultSubject('');
+                          setAiResultBody('');
+                          setShowAiModal(true);
+                        }} 
+                        className="text-xs flex items-center gap-2 font-bold text-indigo-400 bg-indigo-500/10 px-3 py-1.5 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all"
+                      >
+                        <Sparkles className="w-3.5 h-3.5" />
+                        Write with AI
+                      </button>
+                    </div>
                   </div>
                   <input placeholder="Subject" value={subject} onChange={e => setSubject(e.target.value)} className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm font-bold mb-4 focus:border-indigo-500/50 outline-none" />
                   <textarea value={body} onChange={e => setBody(e.target.value)} className="w-full h-64 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono focus:border-indigo-500/50 outline-none resize-none" />
@@ -931,6 +1054,19 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                         <div className="flex items-center gap-3">
                           <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
                           <input placeholder="Subject" value={fu.subject} onChange={e => updateFollowUp(idx, 'subject', e.target.value)} className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50" />
+                          <button
+                            onClick={() => handleGenerateFollowUp(idx)}
+                            disabled={generatingFollowUp || !pitch.trim()}
+                            className="text-[10px] flex items-center gap-1 font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all disabled:opacity-50 flex-shrink-0"
+                            title="Generate with AI"
+                          >
+                            {generatingFollowUp && generatingFollowUpIdx === idx ? (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            ) : (
+                              <Sparkles className="w-3 h-3" />
+                            )}
+                            AI
+                          </button>
                         </div>
                         <textarea placeholder="Body" value={fu.body} onChange={e => updateFollowUp(idx, 'body', e.target.value)} className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none" />
                       </div>
@@ -1340,14 +1476,24 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   <h1 className="text-3xl font-bold text-white">Campaign History</h1>
                   <p className="text-slate-500 text-sm mt-1">Past campaigns, sent emails, and recipient details.</p>
                 </div>
-                <button
-                  onClick={fetchCampaignHistory}
-                  disabled={loadingHistory}
-                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
-                >
-                  {loadingHistory ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
-                  Refresh
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleDetectReplies}
+                    disabled={detectingReplies}
+                    className="bg-emerald-600/80 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-emerald-500 transition-all disabled:opacity-40 text-sm"
+                  >
+                    {detectingReplies ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                    Detect Replies
+                  </button>
+                  <button
+                    onClick={fetchCampaignHistory}
+                    disabled={loadingHistory}
+                    className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
+                  >
+                    {loadingHistory ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+                    Refresh
+                  </button>
+                </div>
               </div>
 
               {loadingHistory ? (
@@ -1381,6 +1527,14 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                           </div>
                         </div>
                         <div className="flex items-center gap-3 flex-shrink-0">
+                          <button
+                            onClick={(e) => { e.stopPropagation(); handleExportCampaign(c.id); }}
+                            disabled={exportingCampaignId === c.id}
+                            className="p-2 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-all"
+                            title="Export CSV"
+                          >
+                            {exportingCampaignId === c.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                          </button>
                           <span className={`text-[10px] font-bold uppercase tracking-widest ${c.status === 'completed' ? 'text-emerald-400' : c.status === 'running' ? 'text-indigo-400' : 'text-slate-500'}`}>
                             {c.status}
                           </span>
@@ -1488,8 +1642,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                       <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Sent From</th>
                                       <th className="px-3 py-2 text-left font-bold">Status</th>
                                       <th className="px-3 py-2 text-left font-bold hidden md:table-cell">Opened</th>
+                                      <th className="px-3 py-2 text-left font-bold hidden lg:table-cell">Reply</th>
+                                      <th className="px-3 py-2 text-left font-bold hidden lg:table-cell">Tag</th>
                                       <th className="px-3 py-2 text-left font-bold">Follow-ups</th>
-                                      <th className="px-3 py-2 text-left font-bold w-24">Actions</th>
+                                      <th className="px-3 py-2 text-left font-bold w-28">Actions</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-800/20">
@@ -1523,6 +1679,49 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                             <span className="text-slate-600 text-[10px]">—</span>
                                           ) : (
                                             <span className="text-slate-600 text-[10px]">—</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 hidden lg:table-cell">
+                                          {r.replied ? (
+                                            <span className="text-emerald-400 text-[10px] font-bold flex items-center gap-1">
+                                              <CheckCircle2 className="w-3 h-3" />
+                                              {r.replied_at ? new Date(r.replied_at).toLocaleDateString([], { month: 'short', day: 'numeric' }) : 'Yes'}
+                                            </span>
+                                          ) : r.bounced ? (
+                                            <span className="text-rose-500 text-[10px] font-bold flex items-center gap-1" title={r.bounce_reason || 'Bounced'}>
+                                              <AlertTriangle className="w-3 h-3" />
+                                              Bounced
+                                            </span>
+                                          ) : (
+                                            <span className="text-slate-600 text-[10px]">—</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2 hidden lg:table-cell">
+                                          {r.replied ? (
+                                            <div className="flex items-center gap-1">
+                                              {r.tag === 'interested' ? (
+                                                <span className="text-emerald-400 text-[10px] font-bold px-1.5 py-0.5 bg-emerald-500/10 border border-emerald-500/20 rounded">Interested</span>
+                                              ) : r.tag === 'not-interested' ? (
+                                                <span className="text-rose-400 text-[10px] font-bold px-1.5 py-0.5 bg-rose-500/10 border border-rose-500/20 rounded">Not Interested</span>
+                                              ) : (
+                                                <span className="text-slate-600 text-[10px]">—</span>
+                                              )}
+                                            </div>
+                                          ) : (
+                                            <div className="flex items-center gap-1">
+                                              <button
+                                                onClick={() => handleTagLead(r.email, 'interested')}
+                                                className="text-[9px] px-1.5 py-0.5 text-emerald-500 hover:bg-emerald-500/10 rounded border border-transparent hover:border-emerald-500/20 transition-all"
+                                              >
+                                                +Int
+                                              </button>
+                                              <button
+                                                onClick={() => handleTagLead(r.email, 'not-interested')}
+                                                className="text-[9px] px-1.5 py-0.5 text-rose-500 hover:bg-rose-500/10 rounded border border-transparent hover:border-rose-500/20 transition-all"
+                                              >
+                                                +Not
+                                              </button>
+                                            </div>
                                           )}
                                         </td>
                                         <td className="px-3 py-2">
@@ -1577,16 +1776,120 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           )}
 
           {activeTab === 'analytics' && (
-            <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500 text-center py-20">
-              <div className="p-10 bg-[#111113] border border-slate-800/40 rounded-[40px] max-w-lg mx-auto shadow-2xl">
-                 <div className="w-20 h-20 bg-indigo-600/10 rounded-3xl flex items-center justify-center mx-auto mb-6 border border-indigo-500/20">
-                    <BarChart3 className="w-10 h-10 text-indigo-400" />
-                 </div>
-                 <h2 className="text-2xl font-bold text-white mb-2 text-white">Campaign Intelligence</h2>
-                 <p className="text-slate-500 text-sm leading-relaxed mb-8">
-                    Open tracking is active!
-                 </p>
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500 space-y-6">
+              <div className="flex items-center justify-between mb-2">
+                <h1 className="text-3xl font-bold text-white">Analytics</h1>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => { fetchCampaignHistory(); handleLoadDeliveryHealth(); }}
+                    className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all text-sm"
+                  >
+                    <RefreshCcw className="w-4 h-4" />
+                    Refresh
+                  </button>
+                </div>
               </div>
+
+              {/* Summary cards */}
+              {campaignHistory.length > 0 && (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-5">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Campaigns</p>
+                    <p className="text-3xl font-bold text-white">{campaignHistory.length}</p>
+                  </div>
+                  <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-5">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Total Sent</p>
+                    <p className="text-3xl font-bold text-white">{campaignHistory.reduce((s, c) => s + c.sentCount, 0)}</p>
+                  </div>
+                  <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-5">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Opened</p>
+                    <p className="text-3xl font-bold text-white">{campaignHistory.reduce((s, c) => s + c.openedCount, 0)}</p>
+                  </div>
+                  <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-5">
+                    <p className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Replied</p>
+                    <p className="text-3xl font-bold text-emerald-400">{campaignHistory.reduce((s, c) => s + (c.recipients || []).filter((r: any) => r.replied).length, 0)}</p>
+                  </div>
+                </div>
+              )}
+
+              {/* Delivery Health */}
+              <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-6">
+                <div className="flex items-center justify-between mb-4">
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                    <Activity className="w-4 h-4" /> Delivery Health
+                  </h2>
+                  <button
+                    onClick={handleLoadDeliveryHealth}
+                    disabled={loadingHealth}
+                    className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1"
+                  >
+                    {loadingHealth ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCcw className="w-3 h-3" />}
+                    {loadingHealth ? 'Loading...' : 'Check Health'}
+                  </button>
+                </div>
+                {deliveryHealth ? (
+                  <div className="space-y-3">
+                    {Object.entries(deliveryHealth).map(([email, data]: [string, any]) => (
+                      <div key={email} className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800/50">
+                        <span className="text-sm text-slate-300 truncate max-w-[250px]">{email}</span>
+                        <div className="flex items-center gap-4 text-[10px]">
+                          <span className="text-slate-500">{data.sent} sent</span>
+                          <span className={data.bounced > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.bounced} bounced</span>
+                          <span className={data.spam > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.spam} spam</span>
+                          <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                            <div
+                              className={`h-full rounded-full ${data.bounced / Math.max(data.total, 1) > 0.1 ? 'bg-rose-500' : data.bounced > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                              style={{ width: `${Math.min(100, ((data.total - data.bounced) / Math.max(data.total, 1)) * 100)}%` }}
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <p className="text-slate-600 text-sm italic">Click "Check Health" to load delivery stats for your accounts.</p>
+                )}
+              </div>
+
+              {/* Campaign Stats */}
+              {campaignHistory.length > 0 && (
+                <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-6">
+                  <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-4 flex items-center gap-2">
+                    <BarChart3 className="w-4 h-4" /> Campaign Performance
+                  </h2>
+                  <div className="space-y-3">
+                    {campaignHistory.map((c) => {
+                      const replyCount = (c.recipients || []).filter((r: any) => r.replied).length;
+                      const bounceCount = (c.recipients || []).filter((r: any) => r.bounced).length;
+                      const interestedCount = (c.recipients || []).filter((r: any) => r.tag === 'interested').length;
+                      const openRate = c.sentCount > 0 ? Math.round((c.openedCount / c.sentCount) * 100) : 0;
+                      const replyRate = c.sentCount > 0 ? Math.round((replyCount / c.sentCount) * 100) : 0;
+                      return (
+                        <div key={c.id} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 flex items-center justify-between">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-sm font-bold text-white truncate">{c.subject || '(No subject)'}</p>
+                            <p className="text-[10px] text-slate-500 mt-0.5">{new Date(c.created_at).toLocaleDateString()}</p>
+                          </div>
+                          <div className="flex items-center gap-4 text-[10px] flex-shrink-0 ml-4">
+                            <span className="text-slate-400">{c.sentCount} sent</span>
+                            <span className="text-emerald-400">{openRate}% open</span>
+                            <span className={replyCount > 0 ? 'text-emerald-400' : 'text-slate-600'}>{replyRate}% replied</span>
+                            {interestedCount > 0 && <span className="text-emerald-400 font-bold">{interestedCount} interested</span>}
+                            {bounceCount > 0 && <span className="text-rose-400">{bounceCount} bounced</span>}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              {campaignHistory.length === 0 && (
+                <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">
+                  <BarChart3 className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">Run a campaign to see analytics.</p>
+                </div>
+              )}
             </div>
           )}
 
@@ -2182,6 +2485,148 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 >
                   Done — {Object.keys(personalizedData).length} emails ready
                 </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Spam Score Modal */}
+      {showSpamModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111113] border border-slate-800 rounded-3xl w-full max-w-lg p-6 space-y-5 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex justify-between items-center border-b border-slate-800/60 pb-4">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-amber-400" />
+                  Spam Score Checker
+                </h3>
+              </div>
+              <button onClick={() => { if (!checkingSpam) setShowSpamModal(false); }} className="text-slate-500 hover:text-slate-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {checkingSpam ? (
+              <div className="flex flex-col items-center justify-center py-8 gap-3 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-amber-400" />
+                <p className="text-sm">Analyzing email content...</p>
+              </div>
+            ) : spamResult ? (
+              <div className="space-y-4">
+                <div className="text-center">
+                  <div className={`inline-flex items-center justify-center w-20 h-20 rounded-full border-4 mb-3 ${
+                    spamResult.score <= 20 ? 'border-emerald-500 text-emerald-400' :
+                    spamResult.score <= 50 ? 'border-amber-500 text-amber-400' :
+                    'border-rose-500 text-rose-400'
+                  }`}>
+                    <span className="text-2xl font-bold">{spamResult.score}</span>
+                  </div>
+                  <p className={`text-sm font-bold ${
+                    spamResult.rating === 'Safe' ? 'text-emerald-400' :
+                    spamResult.rating === 'Warning' ? 'text-amber-400' : 'text-rose-400'
+                  }`}>{spamResult.rating}</p>
+                </div>
+                <div className="grid grid-cols-4 gap-2 text-center text-[10px]">
+                  <div className="bg-slate-950 rounded-xl p-3"><span className="text-slate-400 block">! Marks</span><span className="text-white font-bold">{spamResult.stats.exclamationMarks}</span></div>
+                  <div className="bg-slate-950 rounded-xl p-3"><span className="text-slate-400 block">? Marks</span><span className="text-white font-bold">{spamResult.stats.questionMarks}</span></div>
+                  <div className="bg-slate-950 rounded-xl p-3"><span className="text-slate-400 block">Links</span><span className="text-white font-bold">{spamResult.stats.links}</span></div>
+                  <div className="bg-slate-950 rounded-xl p-3"><span className="text-slate-400 block">Caps</span><span className="text-white font-bold">{spamResult.stats.capsWords}</span></div>
+                </div>
+                {spamResult.issues.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-[11px] font-bold text-amber-400 uppercase tracking-widest">Issues Found</p>
+                    <ul className="space-y-1">
+                      {spamResult.issues.map((issue: string, i: number) => (
+                        <li key={i} className="text-xs text-slate-400 flex items-start gap-2">
+                          <span className="text-amber-400 mt-0.5">•</span>
+                          {issue}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                )}
+                {spamResult.issues.length === 0 && (
+                  <p className="text-xs text-emerald-400 text-center py-4">No spam triggers detected!</p>
+                )}
+                {spamResult.foundWords.length > 0 && (
+                  <div className="bg-slate-950 rounded-xl p-3">
+                    <p className="text-[10px] font-bold text-slate-500 mb-1">Trigger words:</p>
+                    <div className="flex flex-wrap gap-1">
+                      {spamResult.foundWords.map((w: string, i: number) => (
+                        <span key={i} className="text-[10px] text-rose-400 bg-rose-500/10 px-1.5 py-0.5 rounded">{w}</span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
+            {!checkingSpam && (
+              <div className="flex gap-3 border-t border-slate-800/60 pt-4">
+                <button onClick={() => setShowSpamModal(false)} className="flex-1 bg-slate-900 border border-slate-800 hover:bg-slate-800 py-3 rounded-xl font-bold text-xs transition-all">Close</button>
+                <button onClick={handleCheckSpam} className="flex-1 bg-amber-600 hover:bg-amber-500 py-3 rounded-xl font-bold text-xs text-white shadow-lg shadow-amber-500/20 transition-all">Re-check</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Detect Replies Modal */}
+      {showRepliesModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111113] border border-slate-800 rounded-3xl w-full max-w-xl p-6 space-y-5 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[80vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-800/60 pb-4 flex-shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Mail className="w-5 h-5 text-emerald-400" />
+                  Reply Detection
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {detectingReplies ? 'Scanning IMAP inboxes for replies...' : `${detectedReplies.length} reply/detected`}
+                </p>
+              </div>
+              <button onClick={() => setShowRepliesModal(false)} className="text-slate-500 hover:text-slate-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {detectingReplies ? (
+              <div className="flex flex-col items-center justify-center py-12 gap-3 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-emerald-400" />
+                <p className="text-sm">Checking all connected accounts for replies...</p>
+              </div>
+            ) : (
+              <div className="flex-1 overflow-y-auto space-y-2 pr-1">
+                {detectedReplies.length === 0 ? (
+                  <div className="text-center py-10 text-slate-500">
+                    <Mail className="w-8 h-8 mx-auto mb-2 opacity-30" />
+                    <p className="text-sm">No new replies found.</p>
+                  </div>
+                ) : (
+                  detectedReplies.map((r, i) => (
+                    <div key={i} className="bg-slate-950 rounded-xl border border-slate-800/50 p-3 flex items-center justify-between">
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-200 truncate">{r.email}</p>
+                        <p className="text-[10px] text-slate-500 truncate">{r.subject}</p>
+                      </div>
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        r.tag === 'interested' ? 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20' :
+                        r.tag === 'not-interested' ? 'text-rose-400 bg-rose-500/10 border border-rose-500/20' :
+                        'text-slate-500 bg-slate-800/50'
+                      }`}>
+                        {r.tag || 'Unknown'}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+
+            {!detectingReplies && (
+              <div className="flex gap-3 border-t border-slate-800/60 pt-4 flex-shrink-0">
+                <button onClick={() => setShowRepliesModal(false)} className="flex-1 bg-slate-900 border border-slate-800 hover:bg-slate-800 py-3 rounded-xl font-bold text-xs transition-all">Close</button>
+                <button onClick={handleDetectReplies} className="flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold text-xs text-white shadow-lg shadow-emerald-500/20 transition-all">Scan Again</button>
               </div>
             )}
           </div>

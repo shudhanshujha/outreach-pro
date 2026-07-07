@@ -604,6 +604,18 @@ async function runBackgroundWorker() {
       .eq('status', 'pending').lte('scheduled_at', now);
     if (fetchErr) throw fetchErr;
     for (const email of pending || []) {
+      // Skip if recipient has already replied
+      try {
+        const { data: repliedCheck } = await supabase.from('sent_emails').select('replied')
+          .eq('campaign_id', email.campaign_id)
+          .eq('recipient_email', email.recipient_email)
+          .maybeSingle();
+        if (repliedCheck?.replied) {
+          await supabase.from('scheduled_emails').update({ status: 'cancelled' }).eq('id', email.id);
+          continue;
+        }
+      } catch (_) {}
+
       const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
       if (!accountData || !accountData.appPassword) continue;
       try {
@@ -766,7 +778,7 @@ app.get('/api/campaigns', async (req, res) => {
     for (const c of campaigns || []) {
       const { data: sent } = await supabase
         .from('sent_emails')
-        .select('recipient_email, account_email, status, opened_at, sent_at')
+        .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
         .eq('campaign_id', c.id);
 
       const { data: followUps } = await supabase
@@ -805,6 +817,11 @@ app.get('/api/campaigns', async (req, res) => {
           status: s.status,
           opened_at: s.opened_at,
           sent_at: s.sent_at,
+          replied: s.replied || false,
+          replied_at: s.replied_at,
+          tag: s.tag || null,
+          bounced: s.bounced || false,
+          bounce_reason: s.bounce_reason || null,
           followUpStatus: !followUps?.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
         })) || [],
         followUps: followUps || []
@@ -1246,6 +1263,355 @@ app.get('/api/diagnose', async (req, res) => {
   };
 
   res.json(results);
+});
+
+// ============================================================
+// REPLY DETECTION — scan IMAP inboxes for replies to sent campaigns
+// ============================================================
+app.post('/api/detect-replies', async (req, res) => {
+  try {
+    const { data: accounts } = await supabase.from('accounts').select('*');
+    if (!accounts || accounts.length === 0) return res.status(400).json({ error: 'No accounts configured' });
+
+    const { data: sentEmails } = await supabase
+      .from('sent_emails')
+      .select('id, recipient_email, account_email, campaign_id')
+      .is('replied', null);
+
+    if (!sentEmails || sentEmails.length === 0) return res.json({ replies: [], total: 0 });
+
+    const sentByAccount = {};
+    for (const s of sentEmails) {
+      if (!sentByAccount[s.account_email]) sentByAccount[s.account_email] = [];
+      sentByAccount[s.account_email].push(s);
+    }
+
+    const replies = [];
+    for (const acc of accounts) {
+      const sentList = sentByAccount[acc.email];
+      if (!sentList || sentList.length === 0) continue;
+
+      const imap = new ImapFlow({
+        host: 'imap.gmail.com', port: 993, secure: true,
+        auth: { user: acc.email, pass: acc.appPassword },
+        logger: false
+      });
+
+      try {
+        await imap.connect();
+        const mailbox = await imap.mailboxOpen('INBOX');
+        const total = mailbox.exists || 0;
+        if (total > 0) {
+          const start = Math.max(1, total - 99);
+          for await (const msg of imap.fetch(`${start}:${total}`, { envelope: true, uid: true, flags: true })) {
+            const env = msg.envelope;
+            if (!env) continue;
+            const inReplyTo = env.inReplyTo ? env.inReplyTo.replace(/[<>]/g, '').trim() : null;
+            if (!inReplyTo) continue;
+
+            // Check if this reply references any of our sent emails
+            const matched = sentList.find(s => s.id === inReplyTo);
+            if (!matched) continue;
+
+            const from = env.from?.[0];
+            if (!from) continue;
+            const bodySnippet = env.subject || '';
+            const interested = bodySnippet.toLowerCase().includes('interested') || bodySnippet.toLowerCase().includes('yes') || bodySnippet.toLowerCase().includes('pricing') || bodySnippet.toLowerCase().includes('call') || bodySnippet.toLowerCase().includes('meeting') || bodySnippet.toLowerCase().includes('quote');
+            const tag = interested ? 'interested' : 'not-interested';
+
+            try {
+              await supabase.from('sent_emails').update({
+                replied: true,
+                replied_at: new Date().toISOString(),
+                reply_subject: env.subject,
+                reply_snippet: (env.subject || '').slice(0, 200),
+                tag
+              }).eq('id', matched.id);
+            } catch (_) {}
+
+            replies.push({
+              email: matched.recipient_email,
+              campaignId: matched.campaign_id,
+              sentId: matched.id,
+              subject: env.subject,
+              tag
+            });
+          }
+        }
+        await imap.logout();
+      } catch (imapErr) {
+        console.error('IMAP scan failed for', acc.email, imapErr.message);
+      }
+    }
+
+    res.json({ replies, total: replies.length });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// TAG LEAD — manually tag a lead as interested / not-interested
+// ============================================================
+app.post('/api/leads/:email/tag', async (req, res) => {
+  const { email } = req.params;
+  const { tag } = req.body;
+  if (!['interested', 'not-interested'].includes(tag)) {
+    return res.status(400).json({ error: 'Tag must be "interested" or "not-interested"' });
+  }
+  try {
+    await supabase.from('sent_emails').update({ tag }).eq('recipient_email', email);
+    res.json({ success: true, email, tag });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// GET REPLIES for a campaign
+// ============================================================
+app.get('/api/campaigns/:id/replies', async (req, res) => {
+  try {
+    const { data } = await supabase
+      .from('sent_emails')
+      .select('recipient_email, replied, replied_at, reply_subject, reply_snippet, tag')
+      .eq('campaign_id', req.params.id)
+      .eq('replied', true);
+    res.json({ replies: data || [] });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// DELIVERY HEALTH — per account bounce/spam stats
+// ============================================================
+app.get('/api/delivery-health', async (req, res) => {
+  try {
+    const { data: sent } = await supabase.from('sent_emails').select('account_email, bounced, bounce_reason, status');
+    const accountMap = {};
+    for (const s of sent || []) {
+      if (!accountMap[s.account_email]) accountMap[s.account_email] = { total: 0, bounced: 0, spam: 0, sent: 0 };
+      accountMap[s.account_email].total++;
+      if (s.status === 'sent') accountMap[s.account_email].sent++;
+      if (s.bounced) {
+        accountMap[s.account_email].bounced++;
+        if (s.bounce_reason === 'spam') accountMap[s.account_email].spam++;
+      }
+    }
+    res.json({ accounts: accountMap });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// AI FOLLOW-UP GENERATOR — context-aware unique follow-ups
+// ============================================================
+app.post('/api/ai/generate-followup', async (req, res) => {
+  const { originalSubject, originalBody, pitch, recipientName, recipientBusiness, delayDays } = req.body;
+  if (!pitch) return res.status(400).json({ error: 'Pitch is required' });
+  if (!recipientName) return res.status(400).json({ error: 'Recipient name is required' });
+
+  let geminiKey;
+  try { geminiKey = await getGeminiKey(); } catch (err) {
+    return res.status(500).json({ error: 'Gemini API key check failed.' });
+  }
+  if (!geminiKey) {
+    return res.status(400).json({ error: 'Gemini API key is not configured.' });
+  }
+
+  const delayDesc = delayDays === 1 ? '1 day' : `${delayDays} days`;
+  const prompt = `You are a world-class cold email follow-up copywriter. Write a SINGLE follow-up email.
+
+CONTEXT:
+- Recipient: ${recipientName}${recipientBusiness ? ` (${recipientBusiness})` : ''}
+- Original email subject: "${originalSubject || 'N/A'}"
+- Original email body: "${(originalBody || '').slice(0, 500)}"
+- Pitch/offer: ${pitch}
+- Days since last email: ${delayDays}
+
+DIRECTIVES:
+- This is the follow-up sent ${delayDesc} after the initial email.
+- Do NOT repeat the original email. Add NEW value — a different angle, new insight, or social proof.
+- Reference the previous email naturally ("Following up on my note from last week...").
+- Use the recipient's name naturally.
+- Keep it concise (3-5 sentences).
+- End with a soft CTA.
+
+OUTPUT FORMAT: Return a raw JSON object ONLY:
+{
+  "subject": "compelling follow-up subject line (max 10 words)",
+  "body": "full email body in clean HTML using <p> and <br /> tags. Do NOT include <html>, <body>, or <head> tags."
+}
+
+Return ONLY the JSON object, no markdown, no code fences.`;
+
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      },
+      { timeout: 30000 }
+    );
+
+    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!resultText) throw new Error('Empty response from Gemini');
+
+    resultText = resultText.trim();
+    if (resultText.startsWith('```')) {
+      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    }
+
+    const parsed = JSON.parse(resultText);
+    res.json({ followUp: parsed });
+  } catch (err) {
+    console.error('Gemini follow-up error:', err.response?.data || err.message);
+    res.status(500).json({ error: 'Failed to generate follow-up', detail: err.message });
+  }
+});
+
+// ============================================================
+// SPAM SCORE CHECKER — analyze email body for spam triggers
+// ============================================================
+app.post('/api/check-spam', async (req, res) => {
+  const { subject, body } = req.body;
+  if (!body) return res.status(400).json({ error: 'Email body is required' });
+
+  const plainText = body.replace(/<[^>]+>/g, '').toLowerCase();
+
+  const spamWords = [
+    'free', 'act now', 'limited time', 'guaranteed', 'click here', 'exclusive offer',
+    'buy now', 'order now', 'urgent', 'congratulations', 'winner', 'cash', 'bonus',
+    'earn money', 'work from home', 'no cost', 'no obligation', 'risk free',
+    'click below', 'subscribe now', 'don\'t delete', 'amazing', 'deal', 'discount',
+    'prize', 'promise', 'credit', 'loan', 'mortgage', 'debt', 'income', 'investment',
+    'million dollars', 'billion dollars', 'great offer', 'incredible', 'limited supply',
+    'once in a lifetime', 'special promotion', 'this is not spam', 'giveaway',
+    '100% free', 'double your', 'extra income', 'financial freedom', 'instant',
+    'lowest price', 'only $', 'pounds', 'save money', 'save up to', 'trial',
+    'unlimited', 'while supplies last', 'you have been selected', 'dear friend',
+    'no catch', 'accept credit cards', 'all natural', 'apply now', 'avoid bankruptcy',
+    'be your own boss', 'best price', 'big bucks', 'billion', 'billing', 'bulk email',
+    'buy direct', 'cable converter', 'call now', 'cancel at any time', 'can\'t live without',
+    'cash bonus', 'cash now', 'collect', 'compare rates', 'cures', 'deal ending soon',
+    'dear ', 'debt free', 'delete this', 'disclaimer', 'do it today', 'don\'t hesitate',
+    'dormant', 'earn extra cash', 'easy money', 'eliminate debt', 'email marketing',
+    'explode your', 'fast cash', 'fast money', 'financial', 'for only', 'for sale',
+    'free access', 'free consultation', 'free gift', 'free info', 'free investment',
+    'free membership', 'free money', 'free offer', 'free preview', 'free website',
+    'get it now', 'get paid', 'giving away', 'guarantee', 'has a solution',
+    'hello ', 'hidden', 'home employment', 'home based', 'important information',
+    'interest rate', 'join millions', 'life insurance', 'lose weight', 'lower rates',
+    'meeting point', 'message contains', 'million', 'miracle', 'money back',
+    'multi level marketing', 'name brand', 'no age', 'no catch', 'no credit check',
+    'no fees', 'no hidden', 'no interest', 'no investment', 'no purchase necessary',
+    'no questions asked', 'no selling', 'not spam', 'now only', 'obligation',
+    'offer expires', 'one time', 'online degree', 'only $', 'open source',
+    'opt in', 'order today', 'performance', 'phone', 'please read', 'potential',
+    'pre approved', 'presenting', 'prevent', 'price', 'print out', 'priority',
+    'privacy', 'problem', 'produced', 'promise', 'pure', 'quote', 'rate',
+    'real thing', 'refinance', 'refund', 'remove', 'reverses', 'sample',
+    'satisfaction guaranteed', 'save up to', 'score', 'search engine', 'serious',
+    'sex', 'shopping', 'sign up free', 'solution', 'spam', 'special', 'start now',
+    'stock alert', 'stock pick', 'stop snoring', 'strong', 'subject to', 'success',
+    'super', 'supplies', 'take action', 'terms and conditions', 'the best',
+    'the following', 'this is not spam', 'thousands', 'to someone', 'trial',
+    'unbelievable', 'unsecured credit', 'unsolicited', 'us dollars', 'valued',
+    'viagra', 'vicodin', 'web address', 'weight loss', 'what are', 'what\'s app',
+    'while you\'re', 'while supplies last', 'why pay', 'will not believe', 'win',
+    'winner', 'wire transfer', 'work at home', 'you are a winner', 'you have been',
+    'you\'re a winner'
+  ];
+
+  const foundWords = [];
+  for (const word of spamWords) {
+    if (plainText.includes(word)) foundWords.push(word);
+  }
+
+  // Check excessive punctuation
+  const exclCount = (body.match(/!/g) || []).length;
+  const questionCount = (body.match(/\?/g) || []).length;
+  const capsWordCount = (plainText.match(/\b[A-Z]{2,}\b/g) || []).length;
+  const allCapsLines = body.split('\n').filter(l => l.trim() && l === l.toUpperCase() && l.trim().length > 3).length;
+
+  let score = 0;
+  const issues = [];
+
+  if (foundWords.length > 0) {
+    score += Math.min(foundWords.length * 5, 40);
+    issues.push(`${foundWords.length} spam trigger word${foundWords.length > 1 ? 's' : ''} found: ${foundWords.slice(0, 10).join(', ')}${foundWords.length > 10 ? ` (+ ${foundWords.length - 10} more)` : ''}`);
+  }
+  if (exclCount > 3) {
+    score += Math.min((exclCount - 3) * 5, 15);
+    issues.push(`${exclCount} exclamation marks — excessive punctuation flagged`);
+  }
+  if (questionCount > 3) {
+    score += Math.min((questionCount - 3) * 3, 10);
+    issues.push(`${questionCount} question marks — reduce if possible`);
+  }
+  if (allCapsLines > 0) {
+    score += Math.min(allCapsLines * 10, 20);
+    issues.push(`${allCapsLines} line${allCapsLines > 1 ? 's are' : ' is'} in ALL CAPS`);
+  }
+  if (capsWordCount > 5) {
+    score += 5;
+    issues.push(`Unusual number of ALL CAPS words`);
+  }
+
+  // Check for personalization (good)
+  const hasNamePlaceholder = body.includes('{{name}}') || body.includes('{name}') || body.includes('{{Name}}');
+  if (!hasNamePlaceholder && !body.includes(',')) {
+    score += 10;
+    issues.push('No personalization detected — emails without names look templated');
+  }
+
+  // Check link count
+  const linkCount = (body.match(/https?:\/\//g) || []).length;
+  if (linkCount > 3) {
+    score += 10;
+    issues.push(`${linkCount} links — more than 3 links can trigger spam filters`);
+  }
+
+  const result = {
+    score: Math.min(score, 100),
+    rating: score <= 20 ? 'Safe' : score <= 50 ? 'Warning' : 'High Risk',
+    issues,
+    foundWords: foundWords.slice(0, 15),
+    stats: { exclamationMarks: exclCount, questionMarks: questionCount, links: linkCount, capsLines: allCapsLines, capsWords: capsWordCount }
+  };
+
+  res.json(result);
+});
+
+// ============================================================
+// EXPORT CAMPAIGN — CSV download
+// ============================================================
+app.get('/api/campaigns/:id/export', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', id).maybeSingle();
+    if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
+
+    const { data: sent } = await supabase
+      .from('sent_emails')
+      .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
+      .eq('campaign_id', id);
+
+    const headers = 'Email,Sent From,Status,Sent At,Opened At,Replied,Replied At,Tag,Bounced,Bounce Reason';
+    const rows = (sent || []).map(s =>
+      `"${s.recipient_email || ''}","${s.account_email || ''}","${s.status || ''}","${s.sent_at || ''}","${s.opened_at || ''}","${s.replied ? 'Yes' : 'No'}","${s.replied_at || ''}","${s.tag || ''}","${s.bounced ? 'Yes' : 'No'}","${s.bounce_reason || ''}"`
+    ).join('\n');
+
+    const csv = `${headers}\n${rows}`;
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="campaign-${id}.csv"`);
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
 });
 
 // ============================================================
