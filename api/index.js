@@ -412,6 +412,94 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
   }
 });
 
+// ============================================================
+// AI PERSONALIZE — batch-generate unique emails per recipient
+// ============================================================
+app.post('/api/ai/personalize', async (req, res) => {
+  const { recipients, pitch, tone = 'Professional', length = 'Medium' } = req.body;
+  if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
+    return res.status(400).json({ error: 'Recipients array is required' });
+  }
+  if (!pitch) {
+    return res.status(400).json({ error: 'Please describe what you are pitching' });
+  }
+
+  let geminiKey;
+  try { geminiKey = await getGeminiKey(); } catch (err) {
+    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+  }
+  if (!geminiKey) {
+    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+  }
+
+  const BATCH_SIZE = 10;
+  const results = [];
+
+  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
+    const batch = recipients.slice(i, i + BATCH_SIZE);
+    const batchDesc = batch.map((r, idx) =>
+      `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
+    ).join('\n\n');
+
+    const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
+
+THE PITCH / OFFER:
+${pitch}
+
+DIRECTIVES:
+- Write a completely UNIQUE email for EACH person — no two emails should be the same.
+- Research each person's business name and weave relevant, specific details into the email. If the business name suggests an industry (e.g. "Smith Construction" → construction), reference it naturally.
+- The email must feel hand-written, not templated.
+- Use ${tone} tone.
+- Keep it ${length} length.
+- Use the person's name naturally in the greeting and body.
+- Reference their business specifically — mention what you imagine they do, or a plausible challenge they face.
+- Weave the pitch in as a natural solution, not a hard sell.
+- End with a soft call to action (e.g. "Would you be open to a quick call?").
+
+OUTPUT FORMAT:
+Respond with a raw JSON array ONLY. Each element must have:
+{
+  "email": "the person's email address",
+  "subject": "a compelling subject line (max 10 words)",
+  "body": "full email body in clean HTML using <p> and <br /> tags. Do NOT include <html>, <body>, or <head> tags."
+}
+
+Here are the people to write for:
+${batchDesc}
+
+Return ONLY the JSON array, no markdown, no code fences.`;
+
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        },
+        { timeout: 60000 }
+      );
+
+      let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error('Empty response from Gemini');
+
+      resultText = resultText.trim();
+      if (resultText.startsWith('```')) {
+        resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(resultText);
+      if (Array.isArray(parsed)) results.push(...parsed);
+    } catch (err) {
+      console.error('Gemini personalize batch error:', err.response?.data || err.message);
+      for (const r of batch) {
+        results.push({ email: r.email, subject: '', body: '' });
+      }
+    }
+  }
+
+  res.json({ personalized: results, total: results.length });
+});
 
 // ============================================================
 // ACCOUNTS
@@ -555,7 +643,7 @@ app.post('/api/send', async (req, res) => {
   try {
     if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
 
-    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4(), followUpEmails = [] } = req.body;
+    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4(), followUpEmails = [], personalized } = req.body;
 
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
     return res.status(400).json({ error: 'No recipients provided' });
@@ -620,16 +708,18 @@ app.post('/api/send', async (req, res) => {
 
         try {
           const sentId = uuidv4();
-          const pSubject = subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
-          const pBodyHtml = body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
+          const pd = personalized?.[recipient.email];
+          const pSubject = pd?.subject || subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
+          const pBodyHtml = pd?.body || body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const { html: builtHtml, text: builtText } = buildEmailBody(pBodyHtml, sentId);
 
+          const logLabel = pd ? ' [AI personalized]' : '';
           await sendViaBrevo({
             from: accEmail, to: recipient.email, subject: pSubject,
             html: builtHtml, textContent: builtText,
             sentId, campaignId, recipientEmail: recipient.email, accountEmail: accEmail
           });
-          activeLogs.push({ text: 'Sent to ' + recipient.email, type: 'success', timestamp: new Date() });
+          activeLogs.push({ text: 'Sent to ' + recipient.email + logLabel, type: 'success', timestamp: new Date() });
         } catch (err) {
           console.error('Email send error:', err);
           activeLogs.push({ text: 'Failed to send to ' + recipient.email + ': ' + err.message, type: 'error', timestamp: new Date() });

@@ -292,6 +292,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [aiResultSubject, setAiResultSubject] = useState('');
   const [aiResultBody, setAiResultBody] = useState('');
 
+  // AI Personalize states
+  const [pitch, setPitch] = useState('');
+  const [showPersonalizeModal, setShowPersonalizeModal] = useState(false);
+  const [personalizing, setPersonalizing] = useState(false);
+
+  const [personalizedData, setPersonalizedData] = useState<Record<string, { subject: string; body: string }>>({});
+
   // Campaign History state
   const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
@@ -511,6 +518,29 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     document.body.removeChild(link);
   };
 
+  const handlePersonalize = async () => {
+    if (!pitch.trim()) return;
+    setPersonalizing(true);
+    try {
+      const recipients = parsedRecipients.map(r => ({ email: r.email, name: r.name, business: r.business }));
+      const res = await axios.post(`${API_BASE_URL}/api/ai/personalize`, {
+        recipients,
+        pitch: pitch.trim(),
+        tone: 'Professional',
+        length: 'Medium'
+      });
+      const map: Record<string, { subject: string; body: string }> = {};
+      for (const p of res.data.personalized || []) {
+        if (p.subject || p.body) map[p.email] = { subject: p.subject, body: p.body };
+      }
+      setPersonalizedData(map);
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Personalization failed');
+    } finally {
+      setPersonalizing(false);
+    }
+  };
+
   const handleAiGenerateEmail = async () => {
     if (!aiPrompt.trim()) return alert('Please enter what you want the email to say.');
     setAiGenerating(true);
@@ -585,11 +615,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
     });
     try {
+      const hasPersonalized = Object.keys(personalizedData).length > 0;
       await axios.post(`${API_BASE_URL}/api/send`, { 
         accounts: connectedAccounts.map(a => ({ user: a.email })), 
         recipients, 
         subject, 
-        body, 
+        body,
+        personalized: hasPersonalized ? personalizedData : undefined,
         delayMin, 
         delayMax,
         followUps,
@@ -826,6 +858,46 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     />
                   </div>
                   <textarea value={recipientText} onChange={e => setRecipientText(e.target.value)} className="w-full h-40 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-400 focus:border-indigo-500/50 outline-none resize-none" />
+                </section>
+
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <div className="flex items-center justify-between mb-4">
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                      <Sparkles className="w-4 h-4 text-indigo-400" /> AI Personalize
+                    </h2>
+                    <button
+                      onClick={() => {
+                        if (!pitch.trim()) return alert('Describe your pitch first');
+                        if (parsedRecipients.length === 0) return alert('Add recipients first');
+        setPersonalizedData({});
+        setShowPersonalizeModal(true);
+        handlePersonalize();
+                      }}
+                      disabled={personalizing || parsedRecipients.length === 0 || !pitch.trim()}
+                      className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
+                    >
+                      {personalizing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      Personalize All
+                    </button>
+                  </div>
+                  <textarea
+                    value={pitch}
+                    onChange={e => setPitch(e.target.value)}
+                    placeholder="Describe what you are pitching... e.g. 'We offer web design services with a free audit for local businesses. We specialize in helping construction companies get more leads.'"
+                    className="w-full h-24 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm text-slate-300 focus:border-indigo-500/50 outline-none resize-none placeholder:text-slate-600"
+                  />
+                  {Object.keys(personalizedData).length > 0 && (
+                    <div className="mt-3 flex items-center gap-2 text-[10px] text-emerald-400 bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-4 py-2">
+                      <CheckCircle2 className="w-3.5 h-3.5" />
+                      {Object.keys(personalizedData).length}/{parsedRecipients.length} emails personalized
+                      <button
+                        onClick={() => setPersonalizedData({})}
+                        className="ml-auto text-slate-500 hover:text-slate-300 underline"
+                      >
+                        Reset
+                      </button>
+                    </div>
+                  )}
                 </section>
 
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
@@ -2033,6 +2105,85 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 Apply to Campaign
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Personalize Results Modal */}
+      {showPersonalizeModal && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111113] border border-slate-800 rounded-3xl w-full max-w-3xl p-6 space-y-6 shadow-2xl animate-in zoom-in-95 duration-200 max-h-[90vh] flex flex-col">
+            <div className="flex justify-between items-center border-b border-slate-800/60 pb-4 flex-shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-indigo-400" />
+                  AI Personalized Emails
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  {personalizing ? 'Generating unique emails for each recipient...' : `${Object.keys(personalizedData).length} of ${parsedRecipients.length} personalized`}
+                </p>
+              </div>
+              <button onClick={() => { if (!personalizing) setShowPersonalizeModal(false); }} className="text-slate-500 hover:text-slate-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Progress */}
+            {personalizing && (
+              <div className="flex flex-col items-center justify-center py-12 gap-4 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
+                <p className="text-sm">Writing personalized emails — this may take a minute...</p>
+              </div>
+            )}
+
+            {/* Results list */}
+            {!personalizing && (
+              <div className="flex-1 overflow-y-auto space-y-3 pr-1">
+                {parsedRecipients.map((r, i) => {
+                  const pd = personalizedData[r.email];
+                  return (
+                    <div key={i} className="bg-slate-950 rounded-xl border border-slate-800/50 p-4">
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          {pd ? (
+                            <CheckCircle2 className="w-4 h-4 text-emerald-500 flex-shrink-0" />
+                          ) : (
+                            <X className="w-4 h-4 text-rose-500 flex-shrink-0" />
+                          )}
+                          <span className="text-xs font-bold text-slate-300 truncate">{r.email}</span>
+                          <span className="text-[10px] text-slate-600 truncate">· {r.name} · {r.business}</span>
+                        </div>
+                      </div>
+                      {pd && (
+                        <div className="space-y-1.5 text-xs">
+                          <div className="text-indigo-400 font-bold truncate">{pd.subject}</div>
+                          <div className="text-slate-500 line-clamp-2" dangerouslySetInnerHTML={{ __html: pd.body.slice(0, 200) + (pd.body.length > 200 ? '...' : '') }} />
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+
+            {!personalizing && (
+              <div className="flex gap-3 border-t border-slate-800/60 pt-4 flex-shrink-0">
+                <button
+                  onClick={() => setShowPersonalizeModal(false)}
+                  className="flex-1 bg-slate-900 border border-slate-800 hover:bg-slate-800 py-3 rounded-xl font-bold text-xs transition-all"
+                >
+                  Close
+                </button>
+                <button
+                  onClick={() => {
+                    setShowPersonalizeModal(false);
+                  }}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-xs text-white shadow-lg shadow-indigo-500/20 transition-all"
+                >
+                  Done — {Object.keys(personalizedData).length} emails ready
+                </button>
+              </div>
+            )}
           </div>
         </div>
       )}
