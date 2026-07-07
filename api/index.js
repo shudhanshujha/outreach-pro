@@ -666,6 +666,54 @@ app.post('/api/stop', (req, res) => {
 app.get('/api/logs', (req, res) => res.json({ logs: activeLogs, status: activeStatus }));
 
 // ============================================================
+// CAMPAIGN HISTORY
+// ============================================================
+app.get('/api/campaigns', async (req, res) => {
+  try {
+    const { data: campaigns, error } = await supabase
+      .from('campaigns')
+      .select('*')
+      .order('created_at', { ascending: false });
+    if (error) throw error;
+
+    const result = [];
+    for (const c of campaigns || []) {
+      const { data: sent } = await supabase
+        .from('sent_emails')
+        .select('recipient_email, account_email, status, opened_at, sent_at')
+        .eq('campaign_id', c.id);
+
+      const { data: followUps } = await supabase
+        .from('follow_ups')
+        .select('delay_days, subject, body')
+        .eq('campaign_id', c.id);
+
+      result.push({
+        id: c.id,
+        subject: c.subject,
+        status: c.status,
+        created_at: c.created_at,
+        sentCount: sent?.filter(s => s.status === 'sent').length || 0,
+        openedCount: sent?.filter(s => s.opened_at).length || 0,
+        totalRecipients: sent?.length || 0,
+        recipients: sent?.map(s => ({
+          email: s.recipient_email,
+          account: s.account_email,
+          status: s.status,
+          opened_at: s.opened_at,
+          sent_at: s.sent_at
+        })) || [],
+        followUps: followUps || []
+      });
+    }
+
+    res.json({ campaigns: result });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // INBOX (via IMAP)
 // ============================================================
 app.post('/api/inbox', async (req, res) => {

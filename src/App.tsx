@@ -210,7 +210,7 @@ function parseCSV(text: string): string[][] {
 
 const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // --- STATE ---
-  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'prospect' | 'settings' | 'followups'>('campaign');
+  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'prospect' | 'settings' | 'followups' | 'history'>('campaign');
   // ✅ Load accounts from localStorage cache on startup (survives page refresh)
   const [connectedAccounts, setConnectedAccounts] = useState<Account[]>(() => {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); } catch { return []; }
@@ -292,6 +292,11 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [aiResultSubject, setAiResultSubject] = useState('');
   const [aiResultBody, setAiResultBody] = useState('');
 
+  // Campaign History state
+  const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+
   // Prospect Search states
   const [searchCompany, setSearchCompany] = useState('');
   const [_searchTitle, _setSearchTitle] = useState('');
@@ -324,6 +329,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     return () => clearInterval(interval);
   }, [status]);
 
+  useEffect(() => {
+    if (activeTab === 'history') fetchCampaignHistory();
+  }, [activeTab]);
+
   // useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIONS ---
@@ -345,6 +354,18 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setSettingsStatus(res.data.settings);
     } catch (err) {
       console.error('Failed to fetch settings status');
+    }
+  };
+
+  const fetchCampaignHistory = async () => {
+    setLoadingHistory(true);
+    try {
+      const res = await axios.get(`${API_BASE_URL}/api/campaigns`);
+      setCampaignHistory(res.data.campaigns);
+    } catch (err) {
+      console.error('Failed to fetch campaign history');
+    } finally {
+      setLoadingHistory(false);
     }
   };
 
@@ -614,6 +635,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
           <button onClick={() => setActiveTab('followups')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'followups' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <Clock className="w-5 h-5" />
             <span className="hidden md:block font-medium">Follow-ups</span>
+          </button>
+          <button onClick={() => setActiveTab('history')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'history' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <BarChart3 className="w-5 h-5" />
+            <span className="hidden md:block font-medium">History</span>
           </button>
           <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'inbox' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <Inbox className="w-5 h-5" />
@@ -1207,6 +1232,128 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   </div>
                 </div>
               </div>
+            </div>
+          )}
+
+          {activeTab === 'history' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h1 className="text-3xl font-bold text-white">Campaign History</h1>
+                  <p className="text-slate-500 text-sm mt-1">Past campaigns, sent emails, and recipient details.</p>
+                </div>
+                <button
+                  onClick={fetchCampaignHistory}
+                  disabled={loadingHistory}
+                  className="bg-indigo-600 text-white px-5 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
+                >
+                  {loadingHistory ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
+                  Refresh
+                </button>
+              </div>
+
+              {loadingHistory ? (
+                <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-600">
+                  <Loader2 className="w-6 h-6 animate-spin" />
+                  <span className="text-sm">Loading campaigns...</span>
+                </div>
+              ) : campaignHistory.length === 0 ? (
+                <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">
+                  <BarChart3 className="w-10 h-10 text-slate-700 mx-auto mb-3" />
+                  <p className="text-slate-500 font-medium">No campaigns yet.</p>
+                  <p className="text-slate-600 text-xs mt-1">Start a campaign from the Campaign tab to see history here.</p>
+                </div>
+              ) : (
+                <div className="space-y-4">
+                  {campaignHistory.map((c) => (
+                    <div key={c.id} className="bg-[#111113] border border-slate-800/40 rounded-2xl overflow-hidden shadow-sm">
+                      {/* Campaign header */}
+                      <div className="p-5 flex items-center justify-between cursor-pointer hover:bg-white/[0.02] transition-all" onClick={() => setExpandedCampaign(expandedCampaign === c.id ? null : c.id)}>
+                        <div className="flex items-center gap-4 min-w-0">
+                          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${c.status === 'completed' ? 'bg-emerald-500' : c.status === 'running' ? 'bg-indigo-500 animate-pulse' : 'bg-slate-600'}`} />
+                          <div className="min-w-0">
+                            <p className="text-sm font-bold text-white truncate">{c.subject || '(No subject)'}</p>
+                            <p className="text-[10px] text-slate-500 mt-0.5">
+                              {new Date(c.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
+                              {' · '}{c.totalRecipients} recipients · {c.sentCount} sent · {c.openedCount} opened
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <span className={`text-[10px] font-bold uppercase tracking-widest ${c.status === 'completed' ? 'text-emerald-400' : c.status === 'running' ? 'text-indigo-400' : 'text-slate-500'}`}>
+                            {c.status}
+                          </span>
+                          <span className="text-slate-600 text-lg">{expandedCampaign === c.id ? '−' : '+'}</span>
+                        </div>
+                      </div>
+
+                      {/* Expanded details */}
+                      {expandedCampaign === c.id && (
+                        <div className="border-t border-slate-800/40 p-5 space-y-6">
+                          {/* Follow-up sequence used */}
+                          {c.followUps?.length > 0 && (
+                            <div>
+                              <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">Follow-up Sequence</h3>
+                              <div className="flex flex-wrap gap-2">
+                                {c.followUps.map((fu: any, i: number) => (
+                                  <span key={i} className="bg-indigo-500/10 text-indigo-400 px-2.5 py-1 rounded-lg text-[10px] font-bold border border-indigo-500/20">
+                                    Day {fu.delay_days}: {fu.subject?.slice(0, 40)}{fu.subject?.length > 40 ? '...' : ''}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+
+                          {/* Sent recipients table */}
+                          <div>
+                            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">
+                              {c.totalRecipients} Recipients
+                            </h3>
+                            <div className="border border-slate-800/50 rounded-xl overflow-hidden">
+                              <div className="max-h-64 overflow-y-auto">
+                                <table className="w-full text-xs">
+                                  <thead className="bg-slate-900/80 sticky top-0">
+                                    <tr className="text-slate-500 uppercase tracking-wider">
+                                      <th className="px-3 py-2 text-left font-bold">Email</th>
+                                      <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Sent From</th>
+                                      <th className="px-3 py-2 text-left font-bold">Status</th>
+                                      <th className="px-3 py-2 text-left font-bold hidden md:table-cell">Opened</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-800/20">
+                                    {c.recipients.map((r: any, i: number) => (
+                                      <tr key={i} className="hover:bg-white/[0.02] transition-all">
+                                        <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[200px]">{r.email}</td>
+                                        <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[180px]">{r.account}</td>
+                                        <td className="px-3 py-2">
+                                          <span className={`text-[10px] font-bold ${r.status === 'sent' ? 'text-emerald-400' : r.status === 'failed' ? 'text-rose-400' : 'text-slate-500'}`}>
+                                            {r.status}
+                                          </span>
+                                        </td>
+                                        <td className="px-3 py-2 hidden md:table-cell">
+                                          {r.opened_at ? (
+                                            <span className="text-emerald-400 text-[10px] font-bold">
+                                              {new Date(r.opened_at).toLocaleDateString([], { month: 'short', day: 'numeric' })}
+                                            </span>
+                                          ) : r.status === 'sent' ? (
+                                            <span className="text-slate-600 text-[10px]">—</span>
+                                          ) : (
+                                            <span className="text-slate-600 text-[10px]">—</span>
+                                          )}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
