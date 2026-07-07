@@ -231,14 +231,14 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [isEnriching, setIsEnriching] = useState(false);
 
   // Parsed recipient list + follow-up selection
-  const parsedRecipients = recipientText.split('\n')
+  const parsedRecipients = React.useMemo(() => recipientText.split('\n')
     .map(l => l.trim())
     .filter(l => l && !l.startsWith('email,'))
     .map(line => {
       const parts = line.split(',').map(s => s.trim());
       return { email: parts[0] || '', name: parts[1] || 'Unknown', business: parts[2] || 'N/A' };
     })
-    .filter(r => r.email);
+    .filter(r => r.email), [recipientText]);
 
   const [followUpEmails, setFollowUpEmails] = useState<Set<string>>(new Set());
 
@@ -388,7 +388,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     if (activeTab === 'analytics') { fetchCampaignHistory(); handleLoadDeliveryHealth(); }
   }, [activeTab]);
 
-  // useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
+  useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
 
   // --- ACTIONS ---
   const fetchConnectedAccounts = async () => {
@@ -516,7 +516,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       const email = row[emailIdx] || '';
       const name = nameIdx !== -1 ? row[nameIdx] || 'Unknown' : 'Unknown';
       const business = businessIdx !== -1 ? row[businessIdx] || 'N/A' : 'N/A';
-      return `${email},${name},${business}`;
+      const esc = (v: string) => v.includes(',') || v.includes('"') ? `"${v.replace(/"/g, '""')}"` : v;
+      return `${esc(email)},${esc(name)},${esc(business)}`;
     });
 
     setRecipientText(rows.join('\n'));
@@ -706,13 +707,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   };
 
   const handleEnrich = async () => {
-    const emails = recipientText.split('\n').map(l => l.split(',')[0].trim()).filter(e => e);
+    const emails = recipientText.split('\n').map(l => l.trim()).filter(l => l && !l.startsWith('email,')).map(l => l.split(',')[0].trim()).filter(e => e);
     if (emails.length === 0) return alert('Enter emails first');
     setIsEnriching(true);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/enrich`, { emails });
       if (res.data.enrichedData) {
-        setRecipientText(res.data.enrichedData.map((i: any) => `${i.email}, ${i.name}, ${i.business}`).join('\n'));
+        setRecipientText(res.data.enrichedData.map((i: any) => `${i.email},${i.name},${i.business}`).join('\n'));
       } else {
         alert(res.data.error || 'Enrichment unavailable');
       }
@@ -724,10 +725,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleStart = async () => {
     if (connectedAccounts.length === 0) return alert('Connect at least one Gmail account first.');
-    const recipients = recipientText.split('\n').filter(l => l.trim()).map(line => {
-      const p = line.split(',').map(s => s.trim());
-      return { email: p[0], name: p[1] || 'Unknown', business: p[2] || 'N/A' };
-    });
+    const recipients = parsedRecipients;
+    if (recipients.length === 0) return alert('No valid recipients found. Make sure your CSV has email addresses in the first column.');
     try {
       const hasPersonalized = Object.keys(personalizedData).length > 0;
       await axios.post(`${API_BASE_URL}/api/send`, { 

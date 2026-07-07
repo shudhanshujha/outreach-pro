@@ -186,7 +186,7 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
   }
   if (sentId && campaignId && recipientEmail && accountEmail) {
     await supabase.from('sent_emails').insert({
-      id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent'
+      id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent', message_id: messageId.replace(/[<>]/g, '')
     });
   }
 }
@@ -225,9 +225,10 @@ app.get('/api/settings', async (req, res) => {
     const { data, error } = await supabase.from('app_settings').select('key');
     if (error) throw error;
     
-    const brevoSet = !!process.env.BREVO_API_KEY || data.some(d => d.key === 'BREVO_API_KEY');
-    const geminiSet = !!process.env.GEMINI_API_KEY || data.some(d => d.key === 'GEMINI_API_KEY');
-    const apolloSet = !!process.env.APOLLO_API_KEY || data.some(d => d.key === 'APOLLO_API_KEY');
+    const keys = data || [];
+    const brevoSet = !!process.env.BREVO_API_KEY || keys.some(d => d.key === 'BREVO_API_KEY');
+    const geminiSet = !!process.env.GEMINI_API_KEY || keys.some(d => d.key === 'GEMINI_API_KEY');
+    const apolloSet = !!process.env.APOLLO_API_KEY || keys.some(d => d.key === 'APOLLO_API_KEY');
     
     res.json({
       settings: {
@@ -311,7 +312,7 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
       {
         contents: [
           {
@@ -324,7 +325,7 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
           responseMimeType: "application/json"
         }
       },
-      { timeout: 15000 }
+      { timeout: 15000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -378,7 +379,7 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
       {
         contents: [
           {
@@ -391,7 +392,7 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
           responseMimeType: "application/json"
         }
       },
-      { timeout: 20000 }
+      { timeout: 20000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -469,12 +470,12 @@ Return ONLY the JSON array, no markdown, no code fences.`;
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: "application/json" }
       },
-      { timeout: 120000 }
+      { timeout: 120000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -489,9 +490,7 @@ Return ONLY the JSON array, no markdown, no code fences.`;
     if (Array.isArray(parsed)) results.push(...parsed);
   } catch (err) {
     console.error('Gemini personalize error:', err.response?.data || err.message);
-    for (const r of recipients) {
-      results.push({ email: r.email, subject: '', body: '' });
-    }
+    return res.status(500).json({ error: 'AI personalization failed. Please try again or reduce recipient count.' });
   }
 
   res.json({ personalized: results, total: results.length });
@@ -601,20 +600,30 @@ async function runBackgroundWorker() {
   try {
     const now = new Date().toISOString();
     const { data: pending, error: fetchErr } = await supabase.from('scheduled_emails').select('*')
-      .eq('status', 'pending').lte('scheduled_at', now);
+      .eq('status', 'pending').lte('scheduled_at', now).limit(100);
     if (fetchErr) throw fetchErr;
-    for (const email of pending || []) {
-      // Skip if recipient has already replied
+
+    // Batch-fetch reply statuses
+    const campaignIds = [...new Set((pending || []).map(e => e.campaign_id))];
+    const repliedMap = {};
+    if (campaignIds.length > 0) {
       try {
-        const { data: repliedCheck } = await supabase.from('sent_emails').select('replied')
-          .eq('campaign_id', email.campaign_id)
-          .eq('recipient_email', email.recipient_email)
-          .maybeSingle();
-        if (repliedCheck?.replied) {
-          await supabase.from('scheduled_emails').update({ status: 'cancelled' }).eq('id', email.id);
-          continue;
+        const { data: repliedData } = await supabase
+          .from('sent_emails')
+          .select('campaign_id, recipient_email, replied')
+          .in('campaign_id', campaignIds)
+          .eq('replied', true);
+        for (const r of repliedData || []) {
+          repliedMap[`${r.campaign_id}:${r.recipient_email}`] = true;
         }
       } catch (_) {}
+    }
+
+    for (const email of pending || []) {
+      if (repliedMap[`${email.campaign_id}:${email.recipient_email}`]) {
+        await supabase.from('scheduled_emails').update({ status: 'cancelled' }).eq('id', email.id).catch(() => {});
+        continue;
+      }
 
       const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
       if (!accountData || !accountData.appPassword) continue;
@@ -636,8 +645,9 @@ async function runBackgroundWorker() {
       } catch (err) { console.error('Follow-up send failed:', err.message); }
     }
   } catch (err) { console.error('Worker error:', err); }
+  setTimeout(runBackgroundWorker, 60 * 1000);
 }
-setInterval(runBackgroundWorker, 60 * 1000);
+setTimeout(runBackgroundWorker, 60 * 1000);
 
 // ============================================================
 // CAMPAIGN SEND
@@ -651,7 +661,9 @@ app.post('/api/send', async (req, res) => {
   try {
     if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
 
-    const { accounts: accountEmails, recipients, subject, body, delayMin, delayMax, followUps = [], campaignId = uuidv4(), followUpEmails = [], personalized } = req.body;
+    const { accounts: accountEmails, recipients, subject, body, delayMin = 30, delayMax = 90, followUps = [], campaignId = uuidv4(), followUpEmails = [], personalized } = req.body;
+    const minDelay = Math.max(1, Math.min(delayMin, delayMax));
+    const maxDelay = Math.max(minDelay, delayMax);
 
   if (!recipients || !Array.isArray(recipients) || recipients.length === 0) {
     return res.status(400).json({ error: 'No recipients provided' });
@@ -734,7 +746,7 @@ app.post('/api/send', async (req, res) => {
         }
 
         if (!activeStop && i < recipients.length - 1) {
-          const delay = Math.floor(Math.random() * (delayMax - delayMin + 1) + delayMin) * 1000;
+          const delay = Math.floor(Math.random() * (maxDelay - minDelay + 1) + minDelay) * 1000;
           await sleep(delay);
         }
       }
@@ -771,45 +783,72 @@ app.get('/api/campaigns', async (req, res) => {
     const { data: campaigns, error } = await supabase
       .from('campaigns')
       .select('*')
-      .order('created_at', { ascending: false });
+      .order('created_at', { ascending: false })
+      .limit(50);
     if (error) throw error;
+
+    if (!campaigns || campaigns.length === 0) return res.json({ campaigns: [] });
+
+    const ids = campaigns.map(c => c.id);
+
+    // Batch-fetch all sent_emails for all campaigns
+    let sentRows = [];
+    try {
+      const { data } = await supabase
+        .from('sent_emails')
+        .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
+        .in('campaign_id', ids);
+      sentRows = data || [];
+    } catch (_) {
+      const { data } = await supabase
+        .from('sent_emails')
+        .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at')
+        .in('campaign_id', ids);
+      sentRows = data || [];
+    }
+
+    // Batch-fetch follow_ups
+    const { data: allFollowUps } = await supabase
+      .from('follow_ups')
+      .select('campaign_id, delay_days, subject, body')
+      .in('campaign_id', ids);
+
+    // Batch-fetch scheduled_emails for follow-up status
+    const { data: allScheduled } = await supabase
+      .from('scheduled_emails')
+      .select('campaign_id, recipient_email, status')
+      .in('campaign_id', ids);
+
+    // Group by campaign
+    const sentByCampaign = {};
+    for (const s of sentRows || []) {
+      if (!sentByCampaign[s.campaign_id]) sentByCampaign[s.campaign_id] = [];
+      sentByCampaign[s.campaign_id].push(s);
+    }
+
+    const fuByCampaign = {};
+    for (const fu of allFollowUps || []) {
+      if (!fuByCampaign[fu.campaign_id]) fuByCampaign[fu.campaign_id] = [];
+      fuByCampaign[fu.campaign_id].push(fu);
+    }
+
+    const scheduledByCampaign = {};
+    for (const s of allScheduled || []) {
+      if (!scheduledByCampaign[s.campaign_id]) scheduledByCampaign[s.campaign_id] = [];
+      scheduledByCampaign[s.campaign_id].push(s);
+    }
 
     const result = [];
     for (const c of campaigns || []) {
-      let sent;
-      try {
-        const result = await supabase
-          .from('sent_emails')
-          .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
-          .eq('campaign_id', c.id);
-        sent = result.data;
-      } catch (_) {
-        const result = await supabase
-          .from('sent_emails')
-          .select('recipient_email, account_email, status, opened_at, sent_at')
-          .eq('campaign_id', c.id);
-        sent = result.data;
-      }
+      const sent = sentByCampaign[c.id] || [];
+      const followUps = fuByCampaign[c.id] || [];
+      const scheduled = scheduledByCampaign[c.id] || [];
 
-      const { data: followUps } = await supabase
-        .from('follow_ups')
-        .select('delay_days, subject, body')
-        .eq('campaign_id', c.id);
-
-      // Fetch follow-up status for each recipient
-      const recipientEmails = sent?.map(s => s.recipient_email) || [];
-      let scheduledMap = {};
-      if (recipientEmails.length > 0) {
-        const { data: scheduled } = await supabase
-          .from('scheduled_emails')
-          .select('recipient_email, status')
-          .eq('campaign_id', c.id)
-          .in('recipient_email', recipientEmails);
-
-        for (const s of scheduled || []) {
-          if (!scheduledMap[s.recipient_email]) scheduledMap[s.recipient_email] = [];
-          scheduledMap[s.recipient_email].push(s.status);
-        }
+      const recipientEmails = sent.map(s => s.recipient_email);
+      const scheduledMap = {};
+      for (const s of scheduled) {
+        if (!scheduledMap[s.recipient_email]) scheduledMap[s.recipient_email] = [];
+        scheduledMap[s.recipient_email].push(s.status);
       }
 
       result.push({
@@ -817,11 +856,11 @@ app.get('/api/campaigns', async (req, res) => {
         subject: c.subject,
         status: c.status,
         created_at: c.created_at,
-        sentCount: sent?.filter(s => s.status === 'sent').length || 0,
-        openedCount: sent?.filter(s => s.opened_at).length || 0,
-        totalRecipients: sent?.length || 0,
-        hasFollowUps: (followUps?.length || 0) > 0,
-        recipients: sent?.map(s => ({
+        sentCount: sent.filter(s => s.status === 'sent').length || 0,
+        openedCount: sent.filter(s => s.opened_at).length || 0,
+        totalRecipients: sent.length || 0,
+        hasFollowUps: followUps.length > 0,
+        recipients: sent.map(s => ({
           email: s.recipient_email,
           account: s.account_email,
           status: s.status,
@@ -832,7 +871,7 @@ app.get('/api/campaigns', async (req, res) => {
           tag: s.tag || null,
           bounced: s.bounced || false,
           bounce_reason: s.bounce_reason || null,
-          followUpStatus: !followUps?.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
+          followUpStatus: !followUps.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
         })) || [],
         followUps: followUps || []
       });
@@ -886,6 +925,18 @@ app.post('/api/campaigns/:id/start-followup', async (req, res) => {
       return res.status(400).json({ error: 'No follow-up sequence configured for this campaign' });
     }
 
+    // Fetch the original account_email used for this recipient
+    let accountEmail = '';
+    try {
+      const { data: sentRecord } = await supabase
+        .from('sent_emails')
+        .select('account_email')
+        .eq('campaign_id', campaignId)
+        .eq('recipient_email', email)
+        .maybeSingle();
+      if (sentRecord) accountEmail = sentRecord.account_email;
+    } catch (_) {}
+
     for (const fu of followUps) {
       const scheduledTime = new Date();
       scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
@@ -894,7 +945,7 @@ app.post('/api/campaigns/:id/start-followup', async (req, res) => {
         id: uuidv4(),
         campaign_id: campaignId,
         recipient_email: email,
-        account_email: '',
+        account_email: accountEmail,
         subject: fu.subject,
         body: fu.body,
         scheduled_at: scheduledTime.toISOString(),
@@ -1283,10 +1334,20 @@ app.post('/api/detect-replies', async (req, res) => {
     const { data: accounts } = await supabase.from('accounts').select('*');
     if (!accounts || accounts.length === 0) return res.status(400).json({ error: 'No accounts configured' });
 
-    const { data: sentEmails } = await supabase
-      .from('sent_emails')
-      .select('id, recipient_email, account_email, campaign_id')
-      .is('replied', null);
+    let sentEmails;
+    try {
+      const result = await supabase
+        .from('sent_emails')
+        .select('id, recipient_email, account_email, campaign_id, message_id')
+        .is('replied', null);
+      sentEmails = result.data;
+    } catch (_) {
+      const result = await supabase
+        .from('sent_emails')
+        .select('id, recipient_email, account_email, campaign_id')
+        .is('replied', null);
+      sentEmails = result.data;
+    }
 
     if (!sentEmails || sentEmails.length === 0) return res.json({ replies: [], total: 0 });
 
@@ -1316,47 +1377,50 @@ app.post('/api/detect-replies', async (req, res) => {
           for await (const msg of imap.fetch(`${start}:${total}`, { envelope: true, uid: true, flags: true })) {
             const env = msg.envelope;
             if (!env) continue;
-            const inReplyTo = env.inReplyTo ? env.inReplyTo.replace(/[<>]/g, '').trim() : null;
-            if (!inReplyTo) continue;
+            const rawInReplyTo = env.inReplyTo ? env.inReplyTo.replace(/[<>]/g, '').trim() : null;
+            if (!rawInReplyTo) continue;
 
-            // Check if this reply references any of our sent emails
-            const matched = sentList.find(s => s.id === inReplyTo);
+            // Match against message_id first, fall back to id for backward compat
+            const matched = sentList.find(s => (s.message_id && rawInReplyTo === s.message_id) || s.id === rawInReplyTo);
             if (!matched) continue;
 
             const from = env.from?.[0];
             if (!from) continue;
-            const bodySnippet = env.subject || '';
-            const interested = bodySnippet.toLowerCase().includes('interested') || bodySnippet.toLowerCase().includes('yes') || bodySnippet.toLowerCase().includes('pricing') || bodySnippet.toLowerCase().includes('call') || bodySnippet.toLowerCase().includes('meeting') || bodySnippet.toLowerCase().includes('quote');
+            const subject = env.subject || '';
+            const interested = subject.toLowerCase().includes('interested') || subject.toLowerCase().includes('yes') || subject.toLowerCase().includes('pricing') || subject.toLowerCase().includes('call') || subject.toLowerCase().includes('meeting') || subject.toLowerCase().includes('quote') || subject.toLowerCase().includes('let\'s') || subject.toLowerCase().includes('sounds good') || subject.toLowerCase().includes('schedule');
             const tag = interested ? 'interested' : 'not-interested';
 
             try {
               await supabase.from('sent_emails').update({
                 replied: true,
                 replied_at: new Date().toISOString(),
-                reply_subject: env.subject,
-                reply_snippet: (env.subject || '').slice(0, 200),
+                reply_subject: subject,
+                reply_snippet: subject.slice(0, 200),
                 tag
               }).eq('id', matched.id);
-            } catch (_) {}
+            } catch (updateErr) {
+              console.error('Failed to update reply status:', updateErr.message);
+            }
 
             replies.push({
               email: matched.recipient_email,
               campaignId: matched.campaign_id,
               sentId: matched.id,
-              subject: env.subject,
+              subject,
               tag
             });
           }
         }
-        await imap.logout();
+        await imap.logout().catch(() => {});
       } catch (imapErr) {
         console.error('IMAP scan failed for', acc.email, imapErr.message);
+        try { await imap.logout().catch(() => {}); } catch (_) {}
       }
     }
 
     res.json({ replies, total: replies.length });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    res.status(500).json({ error: 'Reply detection failed' });
   }
 });
 
@@ -1365,12 +1429,14 @@ app.post('/api/detect-replies', async (req, res) => {
 // ============================================================
 app.post('/api/leads/:email/tag', async (req, res) => {
   const { email } = req.params;
-  const { tag } = req.body;
+  const { tag, campaignId } = req.body;
   if (!['interested', 'not-interested'].includes(tag)) {
     return res.status(400).json({ error: 'Tag must be "interested" or "not-interested"' });
   }
   try {
-    await supabase.from('sent_emails').update({ tag }).eq('recipient_email', email);
+    const query = supabase.from('sent_emails').update({ tag }).eq('recipient_email', email);
+    if (campaignId) query.eq('campaign_id', campaignId);
+    await query;
     res.json({ success: true, email, tag });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -1467,12 +1533,12 @@ Return ONLY the JSON object, no markdown, no code fences.`;
 
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
       {
         contents: [{ parts: [{ text: prompt }] }],
         generationConfig: { responseMimeType: "application/json" }
       },
-      { timeout: 30000 }
+      { timeout: 30000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
@@ -1618,9 +1684,10 @@ app.get('/api/campaigns/:id/export', async (req, res) => {
       .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
       .eq('campaign_id', id);
 
+    const esc = (v) => (v || '').replace(/"/g, '""');
     const headers = 'Email,Sent From,Status,Sent At,Opened At,Replied,Replied At,Tag,Bounced,Bounce Reason';
     const rows = (sent || []).map(s =>
-      `"${s.recipient_email || ''}","${s.account_email || ''}","${s.status || ''}","${s.sent_at || ''}","${s.opened_at || ''}","${s.replied ? 'Yes' : 'No'}","${s.replied_at || ''}","${s.tag || ''}","${s.bounced ? 'Yes' : 'No'}","${s.bounce_reason || ''}"`
+      `"${esc(s.recipient_email)}","${esc(s.account_email)}","${esc(s.status)}","${esc(s.sent_at)}","${esc(s.opened_at)}","${s.replied ? 'Yes' : 'No'}","${esc(s.replied_at)}","${esc(s.tag)}","${s.bounced ? 'Yes' : 'No'}","${esc(s.bounce_reason)}"`
     ).join('\n');
 
     const csv = `${headers}\n${rows}`;
