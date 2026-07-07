@@ -1302,6 +1302,9 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             <p className="text-[10px] text-slate-500 mt-0.5">
                               {new Date(c.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                               {' · '}{c.totalRecipients} recipients · {c.sentCount} sent · {c.openedCount} opened
+                              {c.hasFollowUps && (
+                                <> · {c.recipients.filter((r: any) => r.followUpStatus === 'running').length} running · {c.recipients.filter((r: any) => r.followUpStatus === 'stopped').length} stopped</>
+                              )}
                             </p>
                           </div>
                         </div>
@@ -1413,6 +1416,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                       <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Sent From</th>
                                       <th className="px-3 py-2 text-left font-bold">Status</th>
                                       <th className="px-3 py-2 text-left font-bold hidden md:table-cell">Opened</th>
+                                      <th className="px-3 py-2 text-left font-bold">Follow-ups</th>
                                       <th className="px-3 py-2 text-left font-bold w-24">Actions</th>
                                     </tr>
                                   </thead>
@@ -1447,6 +1451,21 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                             <span className="text-slate-600 text-[10px]">—</span>
                                           ) : (
                                             <span className="text-slate-600 text-[10px]">—</span>
+                                          )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          {r.followUpStatus === 'running' ? (
+                                            <span className="flex items-center gap-1 text-[10px] font-bold text-emerald-400">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                              Running
+                                            </span>
+                                          ) : r.followUpStatus === 'stopped' ? (
+                                            <span className="flex items-center gap-1 text-[10px] font-bold text-rose-400/70">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
+                                              Stopped
+                                            </span>
+                                          ) : (
+                                            <span className="text-[10px] text-slate-600">—</span>
                                           )}
                                         </td>
                                         <td className="px-3 py-2">

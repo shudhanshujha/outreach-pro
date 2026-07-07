@@ -688,6 +688,22 @@ app.get('/api/campaigns', async (req, res) => {
         .select('delay_days, subject, body')
         .eq('campaign_id', c.id);
 
+      // Fetch follow-up status for each recipient
+      const recipientEmails = sent?.map(s => s.recipient_email) || [];
+      let scheduledMap = {};
+      if (recipientEmails.length > 0) {
+        const { data: scheduled } = await supabase
+          .from('scheduled_emails')
+          .select('recipient_email, status')
+          .eq('campaign_id', c.id)
+          .in('recipient_email', recipientEmails);
+
+        for (const s of scheduled || []) {
+          if (!scheduledMap[s.recipient_email]) scheduledMap[s.recipient_email] = [];
+          scheduledMap[s.recipient_email].push(s.status);
+        }
+      }
+
       result.push({
         id: c.id,
         subject: c.subject,
@@ -696,12 +712,14 @@ app.get('/api/campaigns', async (req, res) => {
         sentCount: sent?.filter(s => s.status === 'sent').length || 0,
         openedCount: sent?.filter(s => s.opened_at).length || 0,
         totalRecipients: sent?.length || 0,
+        hasFollowUps: (followUps?.length || 0) > 0,
         recipients: sent?.map(s => ({
           email: s.recipient_email,
           account: s.account_email,
           status: s.status,
           opened_at: s.opened_at,
-          sent_at: s.sent_at
+          sent_at: s.sent_at,
+          followUpStatus: !followUps?.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
         })) || [],
         followUps: followUps || []
       });
