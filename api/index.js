@@ -776,10 +776,20 @@ app.get('/api/campaigns', async (req, res) => {
 
     const result = [];
     for (const c of campaigns || []) {
-      const { data: sent } = await supabase
-        .from('sent_emails')
-        .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
-        .eq('campaign_id', c.id);
+      let sent;
+      try {
+        const result = await supabase
+          .from('sent_emails')
+          .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
+          .eq('campaign_id', c.id);
+        sent = result.data;
+      } catch (_) {
+        const result = await supabase
+          .from('sent_emails')
+          .select('recipient_email, account_email, status, opened_at, sent_at')
+          .eq('campaign_id', c.id);
+        sent = result.data;
+      }
 
       const { data: followUps } = await supabase
         .from('follow_ups')
@@ -1388,7 +1398,15 @@ app.get('/api/campaigns/:id/replies', async (req, res) => {
 // ============================================================
 app.get('/api/delivery-health', async (req, res) => {
   try {
-    const { data: sent } = await supabase.from('sent_emails').select('account_email, bounced, bounce_reason, status');
+    let sent;
+    try {
+      const result = await supabase.from('sent_emails').select('account_email, bounced, bounce_reason, status');
+      sent = result.data;
+    } catch (_) {
+      // Fallback if bounced/bounce_reason columns don't exist yet
+      const result = await supabase.from('sent_emails').select('account_email, status');
+      sent = result.data;
+    }
     const accountMap = {};
     for (const s of sent || []) {
       if (!accountMap[s.account_email]) accountMap[s.account_email] = { total: 0, bounced: 0, spam: 0, sent: 0 };

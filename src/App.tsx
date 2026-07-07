@@ -385,6 +385,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   useEffect(() => {
     if (activeTab === 'history') fetchCampaignHistory();
+    if (activeTab === 'analytics') { fetchCampaignHistory(); handleLoadDeliveryHealth(); }
   }, [activeTab]);
 
   // useEffect(() => { logEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [logs]);
@@ -1829,22 +1830,26 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 </div>
                 {deliveryHealth ? (
                   <div className="space-y-3">
-                    {Object.entries(deliveryHealth).map(([email, data]: [string, any]) => (
-                      <div key={email} className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800/50">
-                        <span className="text-sm text-slate-300 truncate max-w-[250px]">{email}</span>
-                        <div className="flex items-center gap-4 text-[10px]">
-                          <span className="text-slate-500">{data.sent} sent</span>
-                          <span className={data.bounced > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.bounced} bounced</span>
-                          <span className={data.spam > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.spam} spam</span>
-                          <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
-                            <div
-                              className={`h-full rounded-full ${data.bounced / Math.max(data.total, 1) > 0.1 ? 'bg-rose-500' : data.bounced > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
-                              style={{ width: `${Math.min(100, ((data.total - data.bounced) / Math.max(data.total, 1)) * 100)}%` }}
-                            />
+                    {Object.entries(deliveryHealth).length === 0 ? (
+                      <p className="text-slate-600 text-sm italic">No sent emails yet — delivery stats will appear after you run a campaign.</p>
+                    ) : (
+                      Object.entries(deliveryHealth).map(([email, data]: [string, any]) => (
+                        <div key={email} className="flex items-center justify-between p-3 bg-slate-950 rounded-xl border border-slate-800/50">
+                          <span className="text-sm text-slate-300 truncate max-w-[250px]">{email}</span>
+                          <div className="flex items-center gap-4 text-[10px]">
+                            <span className="text-slate-500">{data.sent} sent</span>
+                            <span className={data.bounced > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.bounced} bounced</span>
+                            <span className={data.spam > 0 ? 'text-rose-400 font-bold' : 'text-emerald-400'}>{data.spam} spam</span>
+                            <div className="w-20 h-1.5 bg-slate-800 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${data.bounced / Math.max(data.total, 1) > 0.1 ? 'bg-rose-500' : data.bounced > 0 ? 'bg-amber-500' : 'bg-emerald-500'}`}
+                                style={{ width: `${Math.min(100, ((data.total - data.bounced) / Math.max(data.total, 1)) * 100)}%` }}
+                              />
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      ))
+                    )}
                   </div>
                 ) : (
                   <p className="text-slate-600 text-sm italic">Click "Check Health" to load delivery stats for your accounts.</p>
