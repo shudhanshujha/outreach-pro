@@ -210,7 +210,7 @@ function parseCSV(text: string): string[][] {
 
 const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // --- STATE ---
-  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'prospect' | 'settings'>('campaign');
+  const [activeTab, setActiveTab] = useState<'campaign' | 'analytics' | 'inbox' | 'prospect' | 'settings' | 'followups'>('campaign');
   // ✅ Load accounts from localStorage cache on startup (survives page refresh)
   const [connectedAccounts, setConnectedAccounts] = useState<Account[]>(() => {
     try { return JSON.parse(localStorage.getItem(CACHE_KEY) || '[]'); } catch { return []; }
@@ -241,7 +241,6 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     .filter(r => r.email);
 
   const [followUpEmails, setFollowUpEmails] = useState<Set<string>>(new Set());
-  const [showRecipientTable, setShowRecipientTable] = useState(false);
 
   const toggleFollowUp = (email: string) => {
     const next = new Set(followUpEmails);
@@ -612,6 +611,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <ListTree className="w-5 h-5" />
             <span className="hidden md:block font-medium">Campaign</span>
           </button>
+          <button onClick={() => setActiveTab('followups')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'followups' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
+            <Clock className="w-5 h-5" />
+            <span className="hidden md:block font-medium">Follow-ups</span>
+          </button>
           <button onClick={() => setActiveTab('inbox')} className={`w-full flex items-center gap-3 p-3 rounded-xl transition-all ${activeTab === 'inbox' ? 'bg-indigo-600/10 text-indigo-400 border border-indigo-500/20' : 'hover:bg-slate-800/50 text-slate-500'}`}>
             <Inbox className="w-5 h-5" />
             <span className="hidden md:block font-medium">Unified Inbox</span>
@@ -771,91 +774,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       className="hidden" 
                     />
                   </div>
-                  <textarea value={recipientText} onChange={e => { setRecipientText(e.target.value); setShowRecipientTable(true); }} className="w-full h-32 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-400 focus:border-indigo-500/50 outline-none resize-none" />
-
-                  {parsedRecipients.length > 0 && (
-                    <div className="mt-4">
-                      <div className="flex items-center justify-between mb-3">
-                        <button
-                          onClick={() => setShowRecipientTable(v => !v)}
-                          className="text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-2 transition-all"
-                        >
-                          {showRecipientTable ? '−' : '+'} {parsedRecipients.length} recipients · {followUpEmails.size} follow-ups
-                        </button>
-                        <div className="flex gap-2 text-[10px]">
-                          <button
-                            onClick={() => setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)))}
-                            className="text-slate-500 hover:text-slate-300 uppercase font-bold tracking-widest"
-                          >
-                            All
-                          </button>
-                          <button
-                            onClick={() => setFollowUpEmails(new Set())}
-                            className="text-slate-500 hover:text-slate-300 uppercase font-bold tracking-widest"
-                          >
-                            None
-                          </button>
-                        </div>
-                      </div>
-
-                      {showRecipientTable && (
-                        <div className="border border-slate-800/50 rounded-xl overflow-hidden">
-                          <div className="max-h-52 overflow-y-auto">
-                            <table className="w-full text-xs">
-                              <thead className="bg-slate-900/80 sticky top-0">
-                                <tr className="text-slate-500 uppercase tracking-wider">
-                                  <th className="px-3 py-2 text-left font-bold w-8">
-                                    <input
-                                      type="checkbox"
-                                      checked={parsedRecipients.length > 0 && followUpEmails.size === parsedRecipients.length}
-                                      onChange={() => {
-                                        if (followUpEmails.size === parsedRecipients.length) {
-                                          setFollowUpEmails(new Set());
-                                        } else {
-                                          setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)));
-                                        }
-                                      }}
-                                      className="accent-indigo-500"
-                                    />
-                                  </th>
-                                  <th className="px-3 py-2 text-left font-bold">Email</th>
-                                  <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Name</th>
-                                  <th className="px-3 py-2 text-left font-bold">Follow ups</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-800/20">
-                                {parsedRecipients.map((r, i) => (
-                                  <tr key={i} className="hover:bg-white/[0.02] transition-all">
-                                    <td className="px-3 py-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={followUpEmails.has(r.email)}
-                                        onChange={() => toggleFollowUp(r.email)}
-                                        className="accent-indigo-500"
-                                      />
-                                    </td>
-                                    <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[200px]">{r.email}</td>
-                                    <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[120px]">{r.name}</td>
-                                    <td className="px-3 py-2">
-                                      {followUpEmails.has(r.email) ? (
-                                        <span className="text-indigo-400 text-[10px] font-bold">On</span>
-                                      ) : (
-                                        <span className="text-slate-600 text-[10px] font-bold">Off</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="px-3 py-2 bg-slate-900/40 border-t border-slate-800/30 flex justify-between text-[10px] text-slate-500">
-                            <span>{parsedRecipients.length} total</span>
-                            <span className="text-indigo-400 font-bold">{followUpEmails.size} with follow-ups</span>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
+                  <textarea value={recipientText} onChange={e => setRecipientText(e.target.value)} className="w-full h-40 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm font-mono text-slate-400 focus:border-indigo-500/50 outline-none resize-none" />
                 </section>
 
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
@@ -901,7 +820,18 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 <div className="sticky top-10 space-y-8">
                   <section className="bg-gradient-to-br from-indigo-600 to-blue-700 p-8 rounded-3xl shadow-2xl shadow-indigo-500/20 text-white">
                     <h2 className="text-2xl font-bold mb-2 text-white">Ready to launch?</h2>
-                    <p className="text-indigo-100/70 text-sm mb-8">Click to begin outreach to {parsedRecipients.length} leads · {followUpEmails.size} with follow-ups</p>
+                    <p className="text-indigo-100/70 text-sm mb-6">Click to begin outreach to {parsedRecipients.length} leads</p>
+                    <div className="flex items-center gap-2 mb-8">
+                      <span className="bg-white/10 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5">
+                        {followUpEmails.size} with follow-ups
+                      </span>
+                      <button
+                        onClick={() => setActiveTab('followups')}
+                        className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
+                      >
+                        Manage
+                      </button>
+                    </div>
                     <div className="grid grid-cols-2 gap-4 mb-8">
                       <div className="bg-white/10 p-4 rounded-2xl">
                         <label className="text-[10px] uppercase font-bold text-indigo-200 block mb-1">Min Delay</label>
@@ -1154,6 +1084,129 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   )}
                 </>
               )}
+            </div>
+          )}
+
+          {activeTab === 'followups' && (
+            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+              <div className="flex items-center justify-between mb-6">
+                <div>
+                  <h1 className="text-3xl font-bold text-white">Follow-up Settings</h1>
+                  <p className="text-slate-500 text-sm mt-1">Manage your follow-up sequence and choose who receives it.</p>
+                </div>
+                <div className="flex items-center gap-3 text-sm">
+                  <span className="text-slate-400">{parsedRecipients.length} recipients</span>
+                  <span className="w-px h-4 bg-slate-700" />
+                  <span className="text-indigo-400 font-bold">{followUpEmails.size} with follow-ups</span>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
+                {/* Sequence config */}
+                <div className="xl:col-span-7 space-y-8">
+                  <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
+                      <Clock className="w-4 h-4" /> Follow-up Sequence (Triggers on Open)
+                    </h2>
+                    <div className="space-y-6">
+                      {followUps.map((fu, idx) => (
+                        <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
+                          <div className="flex items-center gap-3">
+                            <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
+                            <input
+                              placeholder="Subject"
+                              value={fu.subject}
+                              onChange={e => updateFollowUp(idx, 'subject', e.target.value)}
+                              className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50"
+                            />
+                          </div>
+                          <textarea
+                            placeholder="Body"
+                            value={fu.body}
+                            onChange={e => updateFollowUp(idx, 'body', e.target.value)}
+                            className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none placeholder:text-slate-600"
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                </div>
+
+                {/* Recipient assignment */}
+                <div className="xl:col-span-5 space-y-8">
+                  <div className="sticky top-10 space-y-8">
+                    <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                      <div className="flex items-center justify-between mb-4">
+                        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                          <Users className="w-4 h-4" /> Assign Follow-ups
+                        </h2>
+                        <div className="flex gap-2 text-[10px]">
+                          <button onClick={() => setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)))} className="text-indigo-400 hover:text-indigo-300 uppercase font-bold tracking-widest">All</button>
+                          <button onClick={() => setFollowUpEmails(new Set())} className="text-slate-500 hover:text-slate-300 uppercase font-bold tracking-widest">None</button>
+                        </div>
+                      </div>
+
+                      {parsedRecipients.length === 0 ? (
+                        <div className="text-slate-600 text-sm italic p-6 text-center border border-dashed border-slate-800 rounded-xl">
+                          No recipients loaded. Go to <button onClick={() => setActiveTab('campaign')} className="text-indigo-400 underline">Campaign</button> to add contacts.
+                        </div>
+                      ) : (
+                        <div className="border border-slate-800/50 rounded-xl overflow-hidden">
+                          <div className="max-h-[420px] overflow-y-auto">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-900/80 sticky top-0">
+                                <tr className="text-slate-500 uppercase tracking-wider">
+                                  <th className="px-3 py-2 text-left w-8">
+                                    <input
+                                      type="checkbox"
+                                      checked={parsedRecipients.length > 0 && followUpEmails.size === parsedRecipients.length}
+                                      onChange={() => {
+                                        if (followUpEmails.size === parsedRecipients.length) setFollowUpEmails(new Set());
+                                        else setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)));
+                                      }}
+                                      className="accent-indigo-500"
+                                    />
+                                  </th>
+                                  <th className="px-3 py-2 text-left font-bold">Email</th>
+                                  <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Name</th>
+                                  <th className="px-3 py-2 text-left font-bold">Follow-ups</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-800/20">
+                                {parsedRecipients.map((r, i) => (
+                                  <tr key={i} className="hover:bg-white/[0.02] transition-all">
+                                    <td className="px-3 py-2">
+                                      <input
+                                        type="checkbox"
+                                        checked={followUpEmails.has(r.email)}
+                                        onChange={() => toggleFollowUp(r.email)}
+                                        className="accent-indigo-500"
+                                      />
+                                    </td>
+                                    <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[180px]">{r.email}</td>
+                                    <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[100px]">{r.name}</td>
+                                    <td className="px-3 py-2">
+                                      {followUpEmails.has(r.email) ? (
+                                        <span className="text-indigo-400 text-[10px] font-bold">On</span>
+                                      ) : (
+                                        <span className="text-slate-600 text-[10px] font-bold">Off</span>
+                                      )}
+                                    </td>
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                          <div className="px-3 py-2 bg-slate-900/40 border-t border-slate-800/30 flex justify-between text-[10px] text-slate-500">
+                            <span>{parsedRecipients.length} total</span>
+                            <span className="text-indigo-400 font-bold">{followUpEmails.size} with follow-ups</span>
+                          </div>
+                        </div>
+                      )}
+                    </section>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
