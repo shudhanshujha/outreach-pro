@@ -432,16 +432,13 @@ app.post('/api/ai/personalize', async (req, res) => {
     return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
   }
 
-  const BATCH_SIZE = 10;
   const results = [];
 
-  for (let i = 0; i < recipients.length; i += BATCH_SIZE) {
-    const batch = recipients.slice(i, i + BATCH_SIZE);
-    const batchDesc = batch.map((r, idx) =>
-      `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
-    ).join('\n\n');
+  const peopleDesc = recipients.map((r, idx) =>
+    `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
+  ).join('\n\n');
 
-    const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
+  const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
 
 THE PITCH / OFFER:
 ${pitch}
@@ -466,35 +463,34 @@ Respond with a raw JSON array ONLY. Each element must have:
 }
 
 Here are the people to write for:
-${batchDesc}
+${peopleDesc}
 
 Return ONLY the JSON array, no markdown, no code fences.`;
 
-    try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
-        {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        },
-        { timeout: 60000 }
-      );
+  try {
+    const response = await axios.post(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${geminiKey}`,
+      {
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: "application/json" }
+      },
+      { timeout: 120000 }
+    );
 
-      let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!resultText) throw new Error('Empty response from Gemini');
+    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+    if (!resultText) throw new Error('Empty response from Gemini');
 
-      resultText = resultText.trim();
-      if (resultText.startsWith('```')) {
-        resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-      }
+    resultText = resultText.trim();
+    if (resultText.startsWith('```')) {
+      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    }
 
-      const parsed = JSON.parse(resultText);
-      if (Array.isArray(parsed)) results.push(...parsed);
-    } catch (err) {
-      console.error('Gemini personalize batch error:', err.response?.data || err.message);
-      for (const r of batch) {
-        results.push({ email: r.email, subject: '', body: '' });
-      }
+    const parsed = JSON.parse(resultText);
+    if (Array.isArray(parsed)) results.push(...parsed);
+  } catch (err) {
+    console.error('Gemini personalize error:', err.response?.data || err.message);
+    for (const r of recipients) {
+      results.push({ email: r.email, subject: '', body: '' });
     }
   }
 
