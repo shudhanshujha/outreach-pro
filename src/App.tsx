@@ -4,7 +4,7 @@ import {
   Send, Users, Mail, Settings, RefreshCcw, Terminal, 
   FileText, Sparkles, Loader2, BarChart3, 
   Inbox, ListTree, Clock, KeyRound, CheckCircle2, Trash2, Square, Plus, X,
-  Upload, Download, Eye, EyeOff, LogOut, Lock
+  Upload, Download, Eye, EyeOff, LogOut, Lock, Play
 } from 'lucide-react';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import PrivacyPolicy from './PrivacyPolicy';
@@ -296,6 +296,31 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+  const [_actionLoading, _setActionLoading] = useState<string | null>(null);
+
+  const handleStopFollowUp = async (campaignId: string, email: string) => {
+    _setActionLoading(email);
+    try {
+      await axios.post(`${API_BASE_URL}/api/campaigns/${campaignId}/stop-followup`, { email });
+      fetchCampaignHistory();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to stop follow-ups');
+    } finally {
+      _setActionLoading(null);
+    }
+  };
+
+  const handleStartFollowUp = async (campaignId: string, email: string) => {
+    _setActionLoading(email);
+    try {
+      await axios.post(`${API_BASE_URL}/api/campaigns/${campaignId}/start-followup`, { email });
+      fetchCampaignHistory();
+    } catch (err: any) {
+      alert(err.response?.data?.error || 'Failed to start follow-ups');
+    } finally {
+      _setActionLoading(null);
+    }
+  };
 
   // Prospect Search states
   const [searchCompany, setSearchCompany] = useState('');
@@ -1318,13 +1343,14 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                       <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Sent From</th>
                                       <th className="px-3 py-2 text-left font-bold">Status</th>
                                       <th className="px-3 py-2 text-left font-bold hidden md:table-cell">Opened</th>
+                                      <th className="px-3 py-2 text-left font-bold w-24">Actions</th>
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-800/20">
                                     {c.recipients.map((r: any, i: number) => (
                                       <tr key={i} className="hover:bg-white/[0.02] transition-all">
-                                        <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[200px]">{r.email}</td>
-                                        <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[180px]">{r.account}</td>
+                                        <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[180px]">{r.email}</td>
+                                        <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[160px]">{r.account}</td>
                                         <td className="px-3 py-2">
                                           <span className={`text-[10px] font-bold ${r.status === 'sent' ? 'text-emerald-400' : r.status === 'failed' ? 'text-rose-400' : 'text-slate-500'}`}>
                                             {r.status}
@@ -1340,6 +1366,26 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                           ) : (
                                             <span className="text-slate-600 text-[10px]">—</span>
                                           )}
+                                        </td>
+                                        <td className="px-3 py-2">
+                                          <div className="flex items-center gap-1">
+                                            <button
+                                              onClick={() => handleStartFollowUp(c.id, r.email)}
+                                              disabled={_actionLoading === r.email}
+                                              className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-500/10 hover:text-indigo-400 transition-all disabled:opacity-30"
+                                              title="Start follow-ups"
+                                            >
+                                              {_actionLoading === r.email ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                                            </button>
+                                            <button
+                                              onClick={() => handleStopFollowUp(c.id, r.email)}
+                                              disabled={_actionLoading === r.email}
+                                              className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-500/10 hover:text-rose-400 transition-all disabled:opacity-30"
+                                              title="Stop follow-ups"
+                                            >
+                                              <Square className="w-3.5 h-3.5" />
+                                            </button>
+                                          </div>
                                         </td>
                                       </tr>
                                     ))}

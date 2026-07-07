@@ -714,6 +714,71 @@ app.get('/api/campaigns', async (req, res) => {
 });
 
 // ============================================================
+// STOP FOLLOW-UP for a recipient in a campaign
+// ============================================================
+app.post('/api/campaigns/:id/stop-followup', async (req, res) => {
+  const { email } = req.body;
+  const campaignId = req.params.id;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  try {
+    const { error: cancelErr } = await supabase
+      .from('scheduled_emails')
+      .update({ status: 'cancelled' })
+      .eq('campaign_id', campaignId)
+      .eq('recipient_email', email)
+      .eq('status', 'pending');
+    if (cancelErr) throw cancelErr;
+
+    res.json({ success: true, message: `Follow-ups stopped for ${email}` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
+// START FOLLOW-UP for a recipient in a campaign
+// ============================================================
+app.post('/api/campaigns/:id/start-followup', async (req, res) => {
+  const { email } = req.body;
+  const campaignId = req.params.id;
+  if (!email) return res.status(400).json({ error: 'Email is required' });
+
+  try {
+    const { data: followUps, error: fuErr } = await supabase
+      .from('follow_ups')
+      .select('*')
+      .eq('campaign_id', campaignId);
+    if (fuErr) throw fuErr;
+
+    if (!followUps || followUps.length === 0) {
+      return res.status(400).json({ error: 'No follow-up sequence configured for this campaign' });
+    }
+
+    for (const fu of followUps) {
+      const scheduledTime = new Date();
+      scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
+
+      const { error: insertErr } = await supabase.from('scheduled_emails').upsert({
+        id: uuidv4(),
+        campaign_id: campaignId,
+        recipient_email: email,
+        account_email: '',
+        subject: fu.subject,
+        body: fu.body,
+        scheduled_at: scheduledTime.toISOString(),
+        status: 'pending'
+      }, { onConflict: 'id', ignoreDuplicates: true });
+      if (insertErr) console.error('Schedule follow-up error:', insertErr.message);
+    }
+
+    res.json({ success: true, message: `Follow-ups started for ${email} (${followUps.length} emails scheduled)` });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ============================================================
 // INBOX (via IMAP)
 // ============================================================
 app.post('/api/inbox', async (req, res) => {
