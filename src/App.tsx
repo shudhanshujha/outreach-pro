@@ -297,6 +297,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [_actionLoading, _setActionLoading] = useState<string | null>(null);
+  const [selectedRecipients, setSelectedRecipients] = useState<Record<string, Set<string>>>({});
 
   const handleStopFollowUp = async (campaignId: string, email: string) => {
     _setActionLoading(email);
@@ -1331,14 +1332,83 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
                           {/* Sent recipients table */}
                           <div>
-                            <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest mb-2">
-                              {c.totalRecipients} Recipients
-                            </h3>
+                            <div className="flex items-center justify-between mb-2">
+                              <h3 className="text-[10px] font-bold text-slate-500 uppercase tracking-widest">
+                                {c.totalRecipients} Recipients
+                              </h3>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] text-slate-600">
+                                  {(selectedRecipients[c.id] || new Set()).size} selected
+                                </span>
+                                <button
+                                  onClick={() => {
+                                    const sel = selectedRecipients[c.id] || new Set();
+                                    if (sel.size === c.recipients.length) {
+                                      const next = { ...selectedRecipients, [c.id]: new Set() };
+                                      setSelectedRecipients(next);
+                                    } else {
+                                      const next = { ...selectedRecipients, [c.id]: new Set(c.recipients.map((r: any) => r.email)) };
+                                      setSelectedRecipients(next);
+                                    }
+                                  }}
+                                  className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest"
+                                >
+                                  {(selectedRecipients[c.id] || new Set()).size === c.recipients.length ? 'Deselect All' : 'Select All'}
+                                </button>
+                              </div>
+                            </div>
+
+                            {/* Bulk action bar */}
+                            {(selectedRecipients[c.id] || new Set()).size > 0 && (
+                              <div className="flex items-center gap-2 mb-2 px-3 py-2 bg-indigo-500/5 border border-indigo-500/20 rounded-xl">
+                                <span className="text-[10px] text-slate-400 flex-1">{(selectedRecipients[c.id] || new Set()).size} recipient(s) selected</span>
+                                <button
+                                  onClick={async () => {
+                                    const emails = Array.from(selectedRecipients[c.id] || []);
+                                    for (const email of emails) {
+                                      await handleStartFollowUp(c.id, email);
+                                    }
+                                    setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
+                                  }}
+                                  className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-indigo-500/10 transition-all"
+                                >
+                                  <Play className="w-3 h-3" /> Start All
+                                </button>
+                                <button
+                                  onClick={async () => {
+                                    const emails = Array.from(selectedRecipients[c.id] || []);
+                                    for (const email of emails) {
+                                      await handleStopFollowUp(c.id, email);
+                                    }
+                                    setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
+                                  }}
+                                  className="text-[10px] font-bold text-rose-400 hover:text-rose-300 flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
+                                >
+                                  <Square className="w-3 h-3" /> Stop All
+                                </button>
+                              </div>
+                            )}
+
                             <div className="border border-slate-800/50 rounded-xl overflow-hidden">
                               <div className="max-h-64 overflow-y-auto">
                                 <table className="w-full text-xs">
                                   <thead className="bg-slate-900/80 sticky top-0">
                                     <tr className="text-slate-500 uppercase tracking-wider">
+                                      <th className="px-3 py-2 text-left w-8">
+                                        <input
+                                          type="checkbox"
+                                          checked={c.recipients.length > 0 && (selectedRecipients[c.id] || new Set()).size === c.recipients.length}
+                                          onChange={() => {
+                                            const sel = selectedRecipients[c.id] || new Set();
+                                            if (sel.size === c.recipients.length) {
+                                              setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
+                                            } else {
+                                              setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set(c.recipients.map((r: any) => r.email)) }));
+                                            }
+                                          }}
+                                          className="accent-indigo-500"
+                                        />
+                                      </th>
                                       <th className="px-3 py-2 text-left font-bold">Email</th>
                                       <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Sent From</th>
                                       <th className="px-3 py-2 text-left font-bold">Status</th>
@@ -1348,9 +1418,21 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                   </thead>
                                   <tbody className="divide-y divide-slate-800/20">
                                     {c.recipients.map((r: any, i: number) => (
-                                      <tr key={i} className="hover:bg-white/[0.02] transition-all">
-                                        <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[180px]">{r.email}</td>
-                                        <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[160px]">{r.account}</td>
+                                      <tr key={i} className={`hover:bg-white/[0.02] transition-all ${(selectedRecipients[c.id] || new Set()).has(r.email) ? 'bg-indigo-600/5' : ''}`}>
+                                        <td className="px-3 py-2">
+                                          <input
+                                            type="checkbox"
+                                            checked={(selectedRecipients[c.id] || new Set()).has(r.email)}
+                                            onChange={() => {
+                                              const sel = new Set(selectedRecipients[c.id] || []);
+                                              if (sel.has(r.email)) sel.delete(r.email); else sel.add(r.email);
+                                              setSelectedRecipients(prev => ({ ...prev, [c.id]: sel }));
+                                            }}
+                                            className="accent-indigo-500"
+                                          />
+                                        </td>
+                                        <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[160px]">{r.email}</td>
+                                        <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[140px]">{r.account}</td>
                                         <td className="px-3 py-2">
                                           <span className={`text-[10px] font-bold ${r.status === 'sent' ? 'text-emerald-400' : r.status === 'failed' ? 'text-rose-400' : 'text-slate-500'}`}>
                                             {r.status}
