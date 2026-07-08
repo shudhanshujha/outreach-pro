@@ -434,12 +434,15 @@ app.post('/api/ai/personalize', async (req, res) => {
   }
 
   const results = [];
+  // Batch to avoid Gemini token limits — send 5 at a time
+  const BATCH = 5;
+  for (let i = 0; i < recipients.length; i += BATCH) {
+    const batch = recipients.slice(i, i + BATCH);
+    const peopleDesc = batch.map((r, idx) =>
+      `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
+    ).join('\n\n');
 
-  const peopleDesc = recipients.map((r, idx) =>
-    `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
-  ).join('\n\n');
-
-  const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
+    const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
 
 THE PITCH / OFFER:
 ${pitch}
@@ -468,29 +471,33 @@ ${peopleDesc}
 
 Return ONLY the JSON array, no markdown, no code fences.`;
 
-  try {
-    const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
-      {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
-      },
-      { timeout: 120000, headers: { 'X-Goog-Api-Key': geminiKey } }
-    );
+    try {
+      const response = await axios.post(
+        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
+        {
+          contents: [{ parts: [{ text: prompt }] }],
+          generationConfig: { responseMimeType: "application/json" }
+        },
+        { timeout: 60000, headers: { 'X-Goog-Api-Key': geminiKey } }
+      );
 
-    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) throw new Error('Empty response from Gemini');
+      let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+      if (!resultText) throw new Error('Empty response from Gemini');
 
-    resultText = resultText.trim();
-    if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+      resultText = resultText.trim();
+      if (resultText.startsWith('```')) {
+        resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+      }
+
+      const parsed = JSON.parse(resultText);
+      if (Array.isArray(parsed)) results.push(...parsed);
+    } catch (err) {
+      console.error('Gemini personalize batch error:', err.response?.data || err.message);
+      // If a batch fails, still return partial results
+      for (const r of batch) {
+        results.push({ email: r.email, subject: '', body: '' });
+      }
     }
-
-    const parsed = JSON.parse(resultText);
-    if (Array.isArray(parsed)) results.push(...parsed);
-  } catch (err) {
-    console.error('Gemini personalize error:', err.response?.data || err.message);
-    return res.status(500).json({ error: 'AI personalization failed. Please try again or reduce recipient count.' });
   }
 
   res.json({ personalized: results, total: results.length });
@@ -707,8 +714,8 @@ app.post('/api/send', async (req, res) => {
         }
 
         const recipient = recipients[i];
-        if (!recipient.email) {
-          activeLogs.push({ text: 'Skipping recipient with no email at index ' + i, type: 'info', timestamp: new Date() });
+        if (!recipient.email || !recipient.email.includes('@') || !recipient.email.includes('.')) {
+          activeLogs.push({ text: 'Skipping invalid email at index ' + i + ': ' + (recipient.email || '(empty)'), type: 'info', timestamp: new Date() });
           continue;
         }
 
