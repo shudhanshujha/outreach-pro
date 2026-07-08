@@ -16,7 +16,7 @@ interface LogEntry { text: string; type?: 'success' | 'error' | 'info'; timestam
 interface EmailMessage { uid: number; subject: string; from: string; fromName: string; date: string; seen: boolean; }
 interface FollowUp { delayDays: number; subject: string; body: string; }
 
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+const API_BASE_URL = import.meta.env.VITE_API_URL || (typeof window !== 'undefined' ? window.location.origin : '');
 
 const CACHE_KEY = 'outreach_accounts_cache';
 const SESSION_KEY = 'outreach_session';
@@ -294,8 +294,12 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   // AI Personalize states
   const [pitch, setPitch] = useState('');
+  const [personalizeTone, setPersonalizeTone] = useState('Professional');
+  const [personalizeLength, setPersonalizeLength] = useState('Medium');
   const [showPersonalizeModal, setShowPersonalizeModal] = useState(false);
   const [personalizing, setPersonalizing] = useState(false);
+  const [personalizeProgress, setPersonalizeProgress] = useState<{ done: number; total: number; batch: number; totalBatches: number } | null>(null);
+  const personalizeAbortRef = useRef<(() => void) | null>(null);
 
   const [personalizedData, setPersonalizedData] = useState<Record<string, { subject: string; body: string }>>({});
 
@@ -543,25 +547,103 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handlePersonalize = async () => {
     if (!pitch.trim()) return;
+    if (!settingsStatus.GEMINI_API_KEY) {
+      return alert('Gemini AI key is not configured.\n\nPlease go to Settings \u2192 Gemini AI Settings and add your key from Google AI Studio.');
+    }
     setPersonalizing(true);
+    setPersonalizeProgress(null);
+    const map: Record<string, { subject: string; body: string }> = {};
+
+    let aborted = false;
+    personalizeAbortRef.current = () => { aborted = true; };
+
     try {
       const recipients = parsedRecipients.map(r => ({ email: r.email, name: r.name, business: r.business }));
-      const res = await axios.post(`${API_BASE_URL}/api/ai/personalize`, {
-        recipients,
-        pitch: pitch.trim(),
-        tone: 'Professional',
-        length: 'Medium'
+      const response = await fetch(`${API_BASE_URL}/api/ai/personalize`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          recipients,
+          pitch: pitch.trim(),
+          tone: personalizeTone,
+          length: personalizeLength
+        })
       });
-      const map: Record<string, { subject: string; body: string }> = {};
-      for (const p of res.data.personalized || []) {
-        if (p.subject || p.body) map[p.email] = { subject: p.subject, body: p.body };
+
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({ error: 'Personalization failed' }));
+        throw new Error(err.error || 'Personalization failed');
       }
-      setPersonalizedData(map);
+
+      const contentType = response.headers.get('content-type') || '';
+
+      if (contentType.includes('text/event-stream')) {
+        const reader = response.body!.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fatalError: string | null = null;
+
+        while (!aborted) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = lines.pop() || '';
+
+          for (const line of lines) {
+            if (!line.startsWith('data:')) continue;
+            let event: any;
+            try { event = JSON.parse(line.slice(5).trim()); } catch { continue; }
+
+            if (event.type === 'progress') {
+              setPersonalizeProgress({ done: event.done, total: event.total, batch: event.batchNum, totalBatches: event.totalBatches });
+            } else if (event.type === 'batch_done') {
+              for (const p of (event.results || [])) {
+                if (p.subject || p.body) map[p.email] = { subject: p.subject, body: p.body };
+              }
+              setPersonalizedData({ ...map });
+            } else if (event.type === 'batch_error') {
+              console.error('Personalize batch error:', event.error);
+              if (!fatalError) fatalError = event.error;
+            } else if (event.type === 'error') {
+              fatalError = event.error; 
+            } else if (event.type === 'done') {
+              for (const p of (event.personalized || [])) {
+                if (p.subject || p.body) map[p.email] = { subject: p.subject, body: p.body };
+              }
+              setPersonalizedData({ ...map });
+            }
+          }
+        }
+
+        if (!aborted && Object.keys(map).length === 0 && fatalError) {
+          throw new Error(fatalError);
+        }
+      } else {
+        const data = await response.json();
+        for (const p of (data.personalized || [])) {
+          if (p.subject || p.body) map[p.email] = { subject: p.subject, body: p.body };
+        }
+        setPersonalizedData({ ...map });
+        if (Object.keys(map).length === 0 && data.error) throw new Error(data.error);
+      }
     } catch (err: any) {
-      alert(err.response?.data?.error || 'Personalization failed');
+      if (!aborted) {
+        alert(err.message || 'Personalization failed');
+        setShowPersonalizeModal(false);
+      }
     } finally {
+      personalizeAbortRef.current = null;
       setPersonalizing(false);
+      setPersonalizeProgress(null);
     }
+  };
+
+  const handleCancelPersonalize = () => {
+    if (personalizeAbortRef.current) personalizeAbortRef.current();
+    setPersonalizing(false);
+    setPersonalizeProgress(null);
+    setShowPersonalizeModal(false);
   };
 
   const handleCheckSpam = async () => {
@@ -580,6 +662,9 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   };
 
   const handleGenerateFollowUp = async (index: number) => {
+    if (!settingsStatus.GEMINI_API_KEY) {
+      return alert('Gemini AI key is not configured.\n\nPlease go to Settings → Gemini AI Settings and add your key.');
+    }
     setGeneratingFollowUp(true);
     setGeneratingFollowUpIdx(index);
     try {
@@ -658,6 +743,9 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleAiGenerateEmail = async () => {
     if (!aiPrompt.trim()) return alert('Please enter what you want the email to say.');
+    if (!settingsStatus.GEMINI_API_KEY) {
+      return alert('Gemini AI key is not configured.\n\nPlease go to Settings → Gemini AI Settings and add your key from Google AI Studio.');
+    }
     setAiGenerating(true);
     try {
       const res = await axios.post(`${API_BASE_URL}/api/ai/write-email`, {
@@ -668,7 +756,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setAiResultSubject(res.data.subject || '');
       setAiResultBody(res.data.body || '');
     } catch (err: any) {
-      alert(err.response?.data?.error || 'AI generation failed');
+      alert(err.response?.data?.error || 'AI generation failed. Please check your Gemini API key in Settings.');
     } finally {
       setAiGenerating(false);
     }
@@ -977,14 +1065,20 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-indigo-400" /> AI Personalize
+                      {settingsStatus.GEMINI_API_KEY ? (
+                        <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">AI Ready</span>
+                      ) : (
+                        <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">Key Missing</span>
+                      )}
                     </h2>
                     <button
                       onClick={() => {
+                        if (!settingsStatus.GEMINI_API_KEY) return alert('Gemini AI key is not configured.\n\nGo to Settings → Gemini AI Settings to add your key.');
                         if (!pitch.trim()) return alert('Describe your pitch first');
                         if (parsedRecipients.length === 0) return alert('Add recipients first');
-        setPersonalizedData({});
-        setShowPersonalizeModal(true);
-        handlePersonalize();
+                        setPersonalizedData({});
+                        setShowPersonalizeModal(true);
+                        handlePersonalize();
                       }}
                       disabled={personalizing || parsedRecipients.length === 0 || !pitch.trim()}
                       className="text-xs flex items-center gap-2 font-bold text-white bg-indigo-600 px-4 py-2 rounded-xl hover:bg-indigo-500 transition-all shadow-lg shadow-indigo-500/20 disabled:opacity-50"
@@ -999,6 +1093,35 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     placeholder="Describe what you are pitching... e.g. 'We offer web design services with a free audit for local businesses. We specialize in helping construction companies get more leads.'"
                     className="w-full h-24 bg-slate-950 border border-slate-800 rounded-xl p-4 text-sm text-slate-300 focus:border-indigo-500/50 outline-none resize-none placeholder:text-slate-600"
                   />
+                  {/* Tone + Length selectors for personalization */}
+                  <div className="mt-3 grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Tone</label>
+                      <select
+                        value={personalizeTone}
+                        onChange={e => setPersonalizeTone(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-indigo-500/50"
+                      >
+                        <option>Professional</option>
+                        <option>Friendly</option>
+                        <option>Casual</option>
+                        <option>Direct</option>
+                        <option>Persuasive</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase tracking-widest block">Length</label>
+                      <select
+                        value={personalizeLength}
+                        onChange={e => setPersonalizeLength(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-300 outline-none focus:border-indigo-500/50"
+                      >
+                        <option value="Short">Short</option>
+                        <option value="Medium">Medium</option>
+                        <option value="Long">Long</option>
+                      </select>
+                    </div>
+                  </div>
                   {Object.keys(personalizedData).length > 0 && (
                     <div className="mt-3 flex items-center gap-2 text-[10px] text-emerald-400 bg-emerald-500/5 border border-emerald-500/20 rounded-xl px-4 py-2">
                       <CheckCircle2 className="w-3.5 h-3.5" />
@@ -1029,6 +1152,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       </button>
                       <button 
                         onClick={() => {
+                          if (!settingsStatus.GEMINI_API_KEY) return alert('Gemini AI key is not configured.\n\nGo to Settings → Gemini AI Settings to add your key.');
                           setAiResultSubject('');
                           setAiResultBody('');
                           setShowAiModal(true);
@@ -1037,6 +1161,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       >
                         <Sparkles className="w-3.5 h-3.5" />
                         Write with AI
+                        {!settingsStatus.GEMINI_API_KEY && <span className="text-[9px] text-rose-400">(key missing)</span>}
                       </button>
                     </div>
                   </div>
@@ -1058,7 +1183,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             onClick={() => handleGenerateFollowUp(idx)}
                             disabled={generatingFollowUp || !pitch.trim()}
                             className="text-[10px] flex items-center gap-1 font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all disabled:opacity-50 flex-shrink-0"
-                            title="Generate with AI"
+                            title={!pitch.trim() ? 'Add pitch text above to generate AI follow-ups' : !settingsStatus.GEMINI_API_KEY ? 'Gemini key not configured — go to Settings' : 'Generate this follow-up with AI'}
                           >
                             {generatingFollowUp && generatingFollowUpIdx === idx ? (
                               <Loader2 className="w-3 h-3 animate-spin" />
@@ -2427,19 +2552,48 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   AI Personalized Emails
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  {personalizing ? 'Generating unique emails for each recipient...' : `${Object.keys(personalizedData).length} of ${parsedRecipients.length} personalized`}
+                  {personalizing
+                    ? personalizeProgress
+                      ? `Batch ${personalizeProgress.batch}/${personalizeProgress.totalBatches} — ${Math.min(personalizeProgress.done + 5, personalizeProgress.total)} of ${personalizeProgress.total} emails written...`
+                      : 'Starting generation...'
+                    : `${Object.keys(personalizedData).length} of ${parsedRecipients.length} personalized`}
                 </p>
               </div>
-              <button onClick={() => { if (!personalizing) setShowPersonalizeModal(false); }} className="text-slate-500 hover:text-slate-300">
+              <button
+                onClick={personalizing ? handleCancelPersonalize : () => setShowPersonalizeModal(false)}
+                className="text-slate-500 hover:text-slate-300"
+              >
                 <X className="w-5 h-5" />
               </button>
             </div>
 
             {/* Progress */}
             {personalizing && (
-              <div className="flex flex-col items-center justify-center py-12 gap-4 text-slate-400">
+              <div className="flex flex-col items-center justify-center py-8 gap-5 text-slate-400">
                 <Loader2 className="w-8 h-8 animate-spin text-indigo-400" />
-                <p className="text-sm">Writing personalized emails — this may take a minute...</p>
+                {personalizeProgress ? (
+                  <div className="w-full max-w-sm space-y-2">
+                    <div className="flex justify-between text-xs">
+                      <span>Batch {personalizeProgress.batch} / {personalizeProgress.totalBatches}</span>
+                      <span>{Math.min(personalizeProgress.done + 5, personalizeProgress.total)} / {personalizeProgress.total} emails</span>
+                    </div>
+                    <div className="w-full h-1.5 bg-slate-900 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.round(((personalizeProgress.batch - 1) / personalizeProgress.totalBatches) * 100)}%` }}
+                      />
+                    </div>
+                    <p className="text-center text-xs text-slate-600">{Object.keys(personalizedData).length} ready so far</p>
+                  </div>
+                ) : (
+                  <p className="text-sm">Writing personalized emails — this may take a minute...</p>
+                )}
+                <button
+                  onClick={handleCancelPersonalize}
+                  className="text-xs text-rose-400 hover:text-rose-300 border border-rose-500/20 px-4 py-2 rounded-xl transition-all"
+                >
+                  Cancel
+                </button>
               </div>
             )}
 
@@ -2481,10 +2635,18 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 >
                   Close
                 </button>
+                {/* Retry failed button: only show if some failed */}
+                {parsedRecipients.some(r => !personalizedData[r.email]) && Object.keys(personalizedData).length > 0 && (
+                  <button
+                    onClick={() => handlePersonalize()}
+                    className="flex-1 bg-slate-800 hover:bg-slate-700 border border-slate-700 py-3 rounded-xl font-bold text-xs text-slate-300 transition-all flex items-center justify-center gap-2"
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" />
+                    Retry Failed ({parsedRecipients.filter(r => !personalizedData[r.email]).length})
+                  </button>
+                )}
                 <button
-                  onClick={() => {
-                    setShowPersonalizeModal(false);
-                  }}
+                  onClick={() => { setShowPersonalizeModal(false); }}
                   className="flex-1 bg-indigo-600 hover:bg-indigo-500 py-3 rounded-xl font-bold text-xs text-white shadow-lg shadow-indigo-500/20 transition-all"
                 >
                   Done — {Object.keys(personalizedData).length} emails ready

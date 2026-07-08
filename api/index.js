@@ -1,4 +1,4 @@
-require('dotenv').config();
+require('dotenv').config({ path: require('path').resolve(__dirname, '../.env') });
 const dns = require('dns');
 dns.setDefaultResultOrder('ipv4first');
 const express = require('express');
@@ -80,6 +80,46 @@ async function getGeminiKey() {
   console.log('Gemini API key refreshed from Supabase at', new Date().toISOString());
   return _geminiKeyCache;
 }
+
+// Parse Gemini API errors into human-readable messages
+function parseGeminiError(err) {
+  const status = err.response?.status;
+  const detail = err.response?.data?.error?.message || err.message || 'Unknown error';
+  if (status === 400) {
+    if (detail.includes('API_KEY_INVALID') || detail.includes('invalid')) {
+      return 'Invalid Gemini API key. Please update it in Settings → Gemini AI Settings.';
+    }
+    return 'Gemini request error: ' + detail;
+  }
+  if (status === 429) return 'Gemini quota exceeded. Please wait a moment and try again.';
+  if (status === 403) return 'Gemini API key lacks permission. Please check your Google AI Studio key.';
+  if (status === 503 || status === 500) return 'Gemini is temporarily unavailable. Please try again in a moment.';
+  return 'Gemini error: ' + detail;
+}
+
+// Sanitize a string for safe inclusion in AI prompts
+function sanitizeForPrompt(str, maxLength = 200) {
+  if (!str || typeof str !== 'string') return '';
+  return str
+    .replace(/[`\\]/g, '') // remove backticks and backslashes (prompt injection chars)
+    .replace(/\n{3,}/g, '\n\n') // collapse excessive newlines
+    .slice(0, maxLength)
+    .trim();
+}
+
+// Simple concurrency guard for AI endpoints
+let _activeAiRequests = 0;
+const MAX_CONCURRENT_AI = 3;
+function aiConcurrencyGuard() {
+  if (_activeAiRequests >= MAX_CONCURRENT_AI) {
+    throw { status: 429, message: 'Too many AI requests in progress. Please wait a moment.' };
+  }
+  _activeAiRequests++;
+  return () => { _activeAiRequests = Math.max(0, _activeAiRequests - 1); };
+}
+
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
 
 // Only use tracking pixel if we have a real public HTTPS URL (not localhost)
@@ -259,6 +299,8 @@ app.post('/api/settings', async (req, res) => {
     if (key === 'BREVO_API_KEY') {
       _brevoKeyCache = value;
       _brevoKeyCacheTime = Date.now();
+      _brevoAccountEmail = null; // invalidate Brevo account cache too
+      _brevoAccountCacheTime = 0;
     } else if (key === 'GEMINI_API_KEY') {
       _geminiKeyCache = value;
       _geminiKeyCacheTime = Date.now();
@@ -310,39 +352,39 @@ Respond with a raw JSON object ONLY, containing the keys "emailColumn", "nameCol
 The values must be the exact header names from the CSV headers above, or null if you cannot find a suitable match.
 Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
 
+  let release;
+  try {
+    release = aiConcurrencyGuard();
+  } catch (guardErr) {
+    return res.status(429).json({ error: guardErr.message });
+  }
+
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
+      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
       {
-        contents: [
-          {
-            parts: [
-              { text: prompt }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseMimeType: "application/json"
-        }
+        contents: [{ parts: [{ text: prompt }] }],
+        generationConfig: { responseMimeType: 'application/json' }
       },
       { timeout: 15000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) {
-      throw new Error('Empty response from Gemini API');
-    }
-    
+    if (!resultText) throw new Error('Empty response from Gemini API');
+
     resultText = resultText.trim();
     if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/, '').replace(/```$/, '').trim();
+      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
     }
 
     const mapping = JSON.parse(resultText);
     res.json(mapping);
   } catch (err) {
     console.error('Gemini mapping failed:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Gemini Column Mapping failed: ' + (err.response?.data?.error?.message || err.message) });
+    const msg = parseGeminiError(err);
+    res.status(err.response?.status || 500).json({ error: msg });
+  } finally {
+    if (release) release();
   }
 });
 
@@ -377,44 +419,47 @@ Instructions:
 Respond with a raw JSON object containing the keys "subject" and "body".
 Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
 
+  let release;
+  try {
+    release = aiConcurrencyGuard();
+  } catch (guardErr) {
+    return res.status(429).json({ error: guardErr.message });
+  }
+
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
+      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
       {
-        contents: [
-          {
-            parts: [
-              { text: `${systemInstructions}\n\nUser request for email contents: ${userPrompt}` }
-            ]
-          }
-        ],
-        generationConfig: {
-          responseMimeType: "application/json"
-        }
+        contents: [{ parts: [{ text: `${systemInstructions}\n\nUser request for email contents: ${userPrompt}` }] }],
+        generationConfig: { responseMimeType: 'application/json' }
       },
       { timeout: 20000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
 
     let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) {
-      throw new Error('Empty response from Gemini API');
-    }
+    if (!resultText) throw new Error('Empty response from Gemini API');
 
     resultText = resultText.trim();
     if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/, '').replace(/```$/, '').trim();
+      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
     }
 
     const emailTemplate = JSON.parse(resultText);
     res.json(emailTemplate);
   } catch (err) {
     console.error('Gemini write email failed:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Gemini Email generation failed: ' + (err.response?.data?.error?.message || err.message) });
+    const msg = parseGeminiError(err);
+    res.status(err.response?.status || 500).json({ error: msg });
+  } finally {
+    if (release) release();
   }
 });
 
 // ============================================================
 // AI PERSONALIZE — batch-generate unique emails per recipient
+// ============================================================
+// ============================================================
+// AI PERSONALIZE — SSE streaming variant for real-time progress
 // ============================================================
 app.post('/api/ai/personalize', async (req, res) => {
   const { recipients, pitch, tone = 'Professional', length = 'Medium' } = req.body;
@@ -430,77 +475,120 @@ app.post('/api/ai/personalize', async (req, res) => {
     return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
   }
   if (!geminiKey) {
-    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in Settings.' });
   }
 
-  const results = [];
-  // Batch to avoid Gemini token limits — send 5 at a time
-  const BATCH = 5;
-  for (let i = 0; i < recipients.length; i += BATCH) {
-    const batch = recipients.slice(i, i + BATCH);
-    const peopleDesc = batch.map((r, idx) =>
-      `Person ${idx + 1}:\n- Name: ${r.name || 'Unknown'}\n- Business: ${r.business || 'Unknown'}\n- Email: ${r.email}`
-    ).join('\n\n');
+  // Set SSE headers so the frontend can track batch progress
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering on Render
 
-    const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
+  const sendEvent = (data) => {
+    res.write(`data: ${JSON.stringify(data)}\n\n`);
+  };
+
+  const results = [];
+  const BATCH = 5;
+  const totalBatches = Math.ceil(recipients.length / BATCH);
+  const safePitch = sanitizeForPrompt(pitch, 500);
+
+  let release;
+  try {
+    release = aiConcurrencyGuard();
+  } catch (guardErr) {
+    sendEvent({ type: 'error', error: guardErr.message });
+    return res.end();
+  }
+
+  try {
+    for (let i = 0; i < recipients.length; i += BATCH) {
+      const batch = recipients.slice(i, i + BATCH);
+      const batchNum = Math.floor(i / BATCH) + 1;
+
+      sendEvent({
+        type: 'progress',
+        batchNum,
+        totalBatches,
+        done: i,
+        total: recipients.length
+      });
+
+      const peopleDesc = batch.map((r, idx) => {
+        const name = sanitizeForPrompt(r.name || 'Unknown', 80);
+        const business = sanitizeForPrompt(r.business || 'Unknown', 100);
+        return `Person ${idx + 1}:\n- Name: ${name}\n- Business: ${business}\n- Email: ${r.email}`;
+      }).join('\n\n');
+
+      const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
 
 THE PITCH / OFFER:
-${pitch}
+${safePitch}
 
 DIRECTIVES:
 - Write a completely UNIQUE email for EACH person — no two emails should be the same.
-- Research each person's business name and weave relevant, specific details into the email. If the business name suggests an industry (e.g. "Smith Construction" → construction), reference it naturally.
+- Study each person's business name and reference their likely industry naturally.
 - The email must feel hand-written, not templated.
 - Use ${tone} tone.
 - Keep it ${length} length.
-- Use the person's name naturally in the greeting and body.
-- Reference their business specifically — mention what you imagine they do, or a plausible challenge they face.
+- Address the person by name in the greeting.
+- Reference their business specifically — what they do, a challenge they face, or an opportunity.
 - Weave the pitch in as a natural solution, not a hard sell.
 - End with a soft call to action (e.g. "Would you be open to a quick call?").
 
 OUTPUT FORMAT:
 Respond with a raw JSON array ONLY. Each element must have:
 {
-  "email": "the person's email address",
+  "email": "the person's email address (copy exactly)",
   "subject": "a compelling subject line (max 10 words)",
   "body": "full email body in clean HTML using <p> and <br /> tags. Do NOT include <html>, <body>, or <head> tags."
 }
 
-Here are the people to write for:
+Here are the people:
 ${peopleDesc}
 
 Return ONLY the JSON array, no markdown, no code fences.`;
 
-    try {
-      const response = await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
-        {
-          contents: [{ parts: [{ text: prompt }] }],
-          generationConfig: { responseMimeType: "application/json" }
-        },
-        { timeout: 60000, headers: { 'X-Goog-Api-Key': geminiKey } }
-      );
+      try {
+        const response = await axios.post(
+          `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
+          {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { responseMimeType: 'application/json' }
+          },
+          { timeout: 90000, headers: { 'X-Goog-Api-Key': geminiKey } }
+        );
 
-      let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!resultText) throw new Error('Empty response from Gemini');
+        let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        if (!resultText) throw new Error('Empty response from Gemini');
 
-      resultText = resultText.trim();
-      if (resultText.startsWith('```')) {
-        resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-      }
+        resultText = resultText.trim();
+        if (resultText.startsWith('```')) {
+          resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+        }
 
-      const parsed = JSON.parse(resultText);
-      if (Array.isArray(parsed)) results.push(...parsed);
-    } catch (err) {
-      console.error('Gemini personalize batch error:', err.response?.data || err.message);
-      // If a batch fails, still return partial results
-      for (const r of batch) {
-        results.push({ email: r.email, subject: '', body: '' });
+        const parsed = JSON.parse(resultText);
+        if (Array.isArray(parsed)) {
+          results.push(...parsed);
+          sendEvent({ type: 'batch_done', batchNum, results: parsed });
+        }
+      } catch (err) {
+        console.error('Gemini personalize batch error:', parseGeminiError(err));
+        const failedBatch = batch.map(r => ({ email: r.email, subject: '', body: '', error: parseGeminiError(err) }));
+        results.push(...failedBatch);
+        sendEvent({ type: 'batch_error', batchNum, error: parseGeminiError(err), failedEmails: batch.map(r => r.email) });
       }
     }
-  }
 
-  res.json({ personalized: results, total: results.length });
+    sendEvent({ type: 'done', personalized: results, total: results.length });
+    res.end();
+  } catch (err) {
+    console.error('Personalize fatal error:', err);
+    sendEvent({ type: 'error', error: parseGeminiError(err) });
+    res.end();
+  } finally {
+    if (release) release();
+  }
 });
 
 // ============================================================
@@ -1538,12 +1626,19 @@ OUTPUT FORMAT: Return a raw JSON object ONLY:
 
 Return ONLY the JSON object, no markdown, no code fences.`;
 
+  let release;
+  try {
+    release = aiConcurrencyGuard();
+  } catch (guardErr) {
+    return res.status(429).json({ error: guardErr.message });
+  }
+
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent`,
+      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
       {
         contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: "application/json" }
+        generationConfig: { responseMimeType: 'application/json' }
       },
       { timeout: 30000, headers: { 'X-Goog-Api-Key': geminiKey } }
     );
@@ -1560,7 +1655,10 @@ Return ONLY the JSON object, no markdown, no code fences.`;
     res.json({ followUp: parsed });
   } catch (err) {
     console.error('Gemini follow-up error:', err.response?.data || err.message);
-    res.status(500).json({ error: 'Failed to generate follow-up', detail: err.message });
+    const msg = parseGeminiError(err);
+    res.status(err.response?.status || 500).json({ error: msg });
+  } finally {
+    if (release) release();
   }
 });
 
@@ -1573,48 +1671,45 @@ app.post('/api/check-spam', async (req, res) => {
 
   const plainText = body.replace(/<[^>]+>/g, '').toLowerCase();
 
+  // Focused on HIGH-confidence spam triggers; removed common business words like
+  // 'solution', 'price', 'potential', 'performance' etc. that cause false positives
   const spamWords = [
-    'free', 'act now', 'limited time', 'guaranteed', 'click here', 'exclusive offer',
-    'buy now', 'order now', 'urgent', 'congratulations', 'winner', 'cash', 'bonus',
-    'earn money', 'work from home', 'no cost', 'no obligation', 'risk free',
-    'click below', 'subscribe now', 'don\'t delete', 'amazing', 'deal', 'discount',
-    'prize', 'promise', 'credit', 'loan', 'mortgage', 'debt', 'income', 'investment',
-    'million dollars', 'billion dollars', 'great offer', 'incredible', 'limited supply',
+    'act now', 'limited time offer', 'click here', 'exclusive offer',
+    'buy now', 'order now', 'congratulations', 'winner',
+    'earn money', 'work from home', 'no cost', 'risk free',
+    'click below', 'subscribe now', "don't delete", 'deal',
+    'prize', 'credit card required', 'loan', 'mortgage',
+    'million dollars', 'billion dollars', 'great offer', 'limited supply',
     'once in a lifetime', 'special promotion', 'this is not spam', 'giveaway',
-    '100% free', 'double your', 'extra income', 'financial freedom', 'instant',
-    'lowest price', 'only $', 'pounds', 'save money', 'save up to', 'trial',
-    'unlimited', 'while supplies last', 'you have been selected', 'dear friend',
-    'no catch', 'accept credit cards', 'all natural', 'apply now', 'avoid bankruptcy',
-    'be your own boss', 'best price', 'big bucks', 'billion', 'billing', 'bulk email',
-    'buy direct', 'cable converter', 'call now', 'cancel at any time', 'can\'t live without',
-    'cash bonus', 'cash now', 'collect', 'compare rates', 'cures', 'deal ending soon',
-    'dear ', 'debt free', 'delete this', 'disclaimer', 'do it today', 'don\'t hesitate',
-    'dormant', 'earn extra cash', 'easy money', 'eliminate debt', 'email marketing',
-    'explode your', 'fast cash', 'fast money', 'financial', 'for only', 'for sale',
-    'free access', 'free consultation', 'free gift', 'free info', 'free investment',
+    '100% free', 'double your', 'extra income', 'financial freedom',
+    'lowest price', 'only $', 'save money', 'save up to',
+    'while supplies last', 'you have been selected', 'dear friend',
+    'accept credit cards', 'avoid bankruptcy',
+    'be your own boss', 'big bucks', 'bulk email',
+    'buy direct', 'cable converter', 'cancel at any time', "can't live without",
+    'cash bonus', 'cash now', 'compare rates', 'deal ending soon',
+    'debt free', 'delete this', 'do it today',
+    'earn extra cash', 'easy money', 'eliminate debt', 'email marketing',
+    'explode your', 'fast cash', 'fast money', 'for only',
+    'free access', 'free gift', 'free investment',
     'free membership', 'free money', 'free offer', 'free preview', 'free website',
-    'get it now', 'get paid', 'giving away', 'guarantee', 'has a solution',
-    'hello ', 'hidden', 'home employment', 'home based', 'important information',
+    'get it now', 'get paid', 'giving away', 'guarantee',
+    'home employment', 'home based',
     'interest rate', 'join millions', 'life insurance', 'lose weight', 'lower rates',
-    'meeting point', 'message contains', 'million', 'miracle', 'money back',
-    'multi level marketing', 'name brand', 'no age', 'no catch', 'no credit check',
-    'no fees', 'no hidden', 'no interest', 'no investment', 'no purchase necessary',
-    'no questions asked', 'no selling', 'not spam', 'now only', 'obligation',
-    'offer expires', 'one time', 'online degree', 'only $', 'open source',
-    'opt in', 'order today', 'performance', 'phone', 'please read', 'potential',
-    'pre approved', 'presenting', 'prevent', 'price', 'print out', 'priority',
-    'privacy', 'problem', 'produced', 'promise', 'pure', 'quote', 'rate',
-    'real thing', 'refinance', 'refund', 'remove', 'reverses', 'sample',
-    'satisfaction guaranteed', 'save up to', 'score', 'search engine', 'serious',
-    'sex', 'shopping', 'sign up free', 'solution', 'spam', 'special', 'start now',
-    'stock alert', 'stock pick', 'stop snoring', 'strong', 'subject to', 'success',
-    'super', 'supplies', 'take action', 'terms and conditions', 'the best',
-    'the following', 'this is not spam', 'thousands', 'to someone', 'trial',
-    'unbelievable', 'unsecured credit', 'unsolicited', 'us dollars', 'valued',
-    'viagra', 'vicodin', 'web address', 'weight loss', 'what are', 'what\'s app',
-    'while you\'re', 'while supplies last', 'why pay', 'will not believe', 'win',
-    'winner', 'wire transfer', 'work at home', 'you are a winner', 'you have been',
-    'you\'re a winner'
+    'message contains', 'miracle', 'money back',
+    'multi level marketing', 'no credit check',
+    'no purchase necessary', 'no questions asked', 'no selling', 'not spam',
+    'offer expires', 'online degree', 'only $',
+    'opt in', 'order today',
+    'pre approved',
+    'refinance', 'remove', 'reverses',
+    'satisfaction guaranteed',
+    'sex', 'sign up free', 'spam', 'start now',
+    'stock alert', 'stock pick', 'stop snoring',
+    'this is not spam', 'unbelievable', 'unsecured credit', 'unsolicited', 'us dollars',
+    'viagra', 'vicodin', 'weight loss', "what's app",
+    'while supplies last', 'why pay', 'will not believe', 'win',
+    'wire transfer', 'work at home', 'you are a winner', "you're a winner"
   ];
 
   const foundWords = [];
