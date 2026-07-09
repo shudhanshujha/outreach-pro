@@ -246,7 +246,7 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentEmailId,
     throw new Error('Brevo API: ' + detail);
   }
   if (sentEmailId) {
-    await supabase.from('sent_emails').update({ status: 'sent', message_id: msgId.replace(/[<>]/g, '') }).eq('id', sentEmailId);
+    await supabase.from('sent_emails').update({ status: 'sent' }).eq('id', sentEmailId);
   }
 }
 
@@ -591,7 +591,7 @@ app.delete('/api/accounts/:email', async (req, res) => {
 // ============================================================
 app.get('/api/t/:id.png', async (req, res) => {
   try {
-    const { data: emailData, error } = await supabase.from('sent_emails').select('*').eq('id', req.params.id).maybeSingle();
+    const { data: emailData, error } = await supabase.from('sent_emails').select('id, campaign_id, recipient_email, opened_at, account_email').eq('id', req.params.id).maybeSingle();
     if (error) throw error;
     if (emailData && !emailData.opened_at) {
       const { error: updateErr } = await supabase.from('sent_emails').update({ opened_at: new Date().toISOString() }).eq('id', req.params.id);
@@ -684,10 +684,11 @@ async function runBackgroundWorker() {
       try {
         sentId = uuidv4();
         const { html: builtHtml, text: builtText } = buildEmailBody(email.body, sentId);
-        await supabase.from('sent_emails').insert({
+        const { error: insErr } = await supabase.from('sent_emails').insert({
           id: sentId, campaign_id: email.campaign_id, recipient_email: email.recipient_email,
           account_email: email.account_email, status: 'sending', sent_at: new Date().toISOString()
-        }).catch(err => console.error('Failed to create follow-up sent_emails record:', err.message));
+        });
+        if (insErr) { console.error('Failed to create follow-up sent_emails record:', insErr.message); sentId = null; }
         await sendViaBrevo({
           from: email.account_email,
           to: email.recipient_email,
@@ -699,7 +700,7 @@ async function runBackgroundWorker() {
         await supabase.from('scheduled_emails').update({ status: 'sent' }).eq('id', email.id);
       } catch (err) {
         if (sentId) {
-          supabase.from('sent_emails').update({ status: 'failed', bounced: true, bounce_reason: err.message?.slice(0, 500) || 'Follow-up failed' }).eq('id', sentId).catch(() => {});
+          await supabase.from('sent_emails').update({ status: 'failed' }).eq('id', sentId);
         }
         console.error('Follow-up send failed:', err.message);
       }
@@ -797,10 +798,11 @@ app.post('/api/send', async (req, res) => {
           const { html: builtHtml, text: builtText } = buildEmailBody(pBodyHtml, sentId);
 
           // Always record the send attempt so campaign history shows recipients
-          await supabase.from('sent_emails').insert({
+          const { error: insErr } = await supabase.from('sent_emails').insert({
             id: sentId, campaign_id: campaignId, recipient_email: recipient.email,
             account_email: accEmail, status: 'sending', sent_at: new Date().toISOString()
-          }).catch(err => console.error('Failed to create sent_emails record:', err.message));
+          });
+          if (insErr) { console.error('Failed to create sent_emails record:', insErr.message); continue; }
 
           const logLabel = pd ? ' [AI personalized]' : '';
           await sendViaBrevo({
@@ -813,7 +815,7 @@ app.post('/api/send', async (req, res) => {
           console.error('Email send error:', err);
           // Mark the record as failed so it still shows in history
           if (sentId) {
-            supabase.from('sent_emails').update({ status: 'failed', bounced: true, bounce_reason: err.message?.slice(0, 500) || 'Send failed' }).eq('id', sentId).catch(() => {});
+            await supabase.from('sent_emails').update({ status: 'failed' }).eq('id', sentId);
           }
           activeLogs.push({ text: 'Failed to send to ' + recipient.email + ': ' + err.message, type: 'error', timestamp: new Date() });
         }
@@ -869,7 +871,7 @@ app.get('/api/campaigns', async (req, res) => {
     try {
       const { data: sentData, error: sentError } = await supabase
         .from('sent_emails')
-        .select('*')
+        .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
         .in('campaign_id', ids);
       if (!sentError) {
         sentRows = sentData || [];
@@ -879,7 +881,7 @@ app.get('/api/campaigns', async (req, res) => {
       try {
         const { data: fallbackData } = await supabase
           .from('sent_emails')
-          .select('*')
+          .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at')
           .in('campaign_id', ids);
         sentRows = fallbackData || [];
       } catch (_) { /* ignore */ }
