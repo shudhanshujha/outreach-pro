@@ -2277,12 +2277,12 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Used to intelligently map CSV headers and write high-converting cold email copy (Anthropic Claude).
+                    Used to intelligently map CSV headers and write high-converting cold email copy (Google Gemini).
                   </p>
                   <div className="space-y-2">
                     <input
                       type="password"
-                      placeholder="Paste AI API Key (Claude)"
+                      placeholder="Paste Google Gemini API Key"
                       value={tempGeminiKey}
                       onChange={e => setTempGeminiKey(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"

@@ -64,7 +64,7 @@ async function getApolloKey() {
   return _apolloKeyCache;
 }
 
-async function getAnthropicKey() {
+async function getGeminiKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
 
   const now = Date.now();
@@ -81,8 +81,8 @@ async function getAnthropicKey() {
   return _geminiKeyCache;
 }
 
-// Parse Anthropic API errors into human-readable messages
-function parseAnthropicError(err) {
+// Parse Gemini API errors into human-readable messages
+function parseGeminiError(err) {
   const status = err.response?.status;
   const detail = err.response?.data?.error?.message || err.message || 'Unknown error';
   if (status === 400) {
@@ -118,36 +118,31 @@ function aiConcurrencyGuard() {
   return () => { _activeAiRequests = Math.max(0, _activeAiRequests - 1); };
 }
 
-const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
-const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1/messages';
+const GEMINI_MODEL = 'gemini-2.0-flash';
+const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
 
-// Helper to call Anthropic with a prompt and get text back
-async function callAnthropic(prompt, system, timeout = 30000) {
-  const key = await getAnthropicKey();
-  const response = await axios.post(ANTHROPIC_API_BASE,
+// Helper to call Gemini with a prompt and get text back
+async function callGemini(prompt, system, timeout = 30000) {
+  const key = await getGeminiKey();
+  const response = await axios.post(GEMINI_API_BASE + '/' + GEMINI_MODEL + ':generateContent?key=' + key,
     {
-      model: ANTHROPIC_MODEL,
-      max_tokens: 4096,
-      system,
-      messages: [{ role: 'user', content: prompt }]
+      contents: [{ role: 'user', parts: [{ text: prompt }] }],
+      systemInstruction: { parts: [{ text: system }] },
+      generationConfig: { maxOutputTokens: 4096 }
     },
     {
       timeout,
-      headers: {
-        'x-api-key': key,
-        'anthropic-version': '2023-06-01',
-        'content-type': 'application/json'
-      }
+      headers: { 'content-type': 'application/json' }
     }
   );
-  const text = response.data?.content?.[0]?.text;
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
   if (!text) throw new Error('Empty response from AI');
   return text;
 }
 
-// Helper to call Anthropic and parse JSON response
-async function callAnthropicJSON(prompt, system, timeout = 30000) {
-  const text = await callAnthropic(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
+// Helper to call Gemini and parse JSON response
+async function callGeminiJSON(prompt, system, timeout = 30000) {
+  const text = await callGemini(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
   let cleaned = text.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
@@ -360,7 +355,7 @@ app.post('/api/ai/map-csv', async (req, res) => {
 
   let aiKey;
   try {
-    aiKey = await getAnthropicKey();
+    aiKey = await getGeminiKey();
   } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
@@ -385,11 +380,11 @@ Return a JSON object with keys "emailColumn", "nameColumn", "businessColumn" usi
   }
 
   try {
-    const mapping = await callAnthropicJSON(prompt, '', 15000);
+    const mapping = await callGeminiJSON(prompt, '', 15000);
     res.json(mapping);
   } catch (err) {
     console.error('AI mapping failed:', err.response?.data || err.message);
-    const msg = parseAnthropicError(err);
+    const msg = parseGeminiError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -404,7 +399,7 @@ app.post('/api/ai/write-email', async (req, res) => {
 
   let aiKey;
   try {
-    aiKey = await getAnthropicKey();
+    aiKey = await getGeminiKey();
   } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
@@ -432,11 +427,11 @@ Return a JSON object with keys "subject" and "body".`;
   }
 
   try {
-    const emailTemplate = await callAnthropicJSON(userPrompt, system, 20000);
+    const emailTemplate = await callGeminiJSON(userPrompt, system, 20000);
     res.json(emailTemplate);
   } catch (err) {
     console.error('AI write email failed:', err.response?.data || err.message);
-    const msg = parseAnthropicError(err);
+    const msg = parseGeminiError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -459,7 +454,7 @@ app.post('/api/ai/personalize', async (req, res) => {
   }
 
   let aiKey;
-  try { aiKey = await getAnthropicKey(); } catch (err) {
+  try { aiKey = await getGeminiKey(); } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
   if (!aiKey) {
@@ -518,24 +513,19 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
       }).join('\n\n');
 
       try {
-        const response = await axios.post(ANTHROPIC_API_BASE,
+        const response = await axios.post(GEMINI_API_BASE + '/' + GEMINI_MODEL + ':generateContent?key=' + aiKey,
           {
-            model: ANTHROPIC_MODEL,
-            max_tokens: 4096,
-            system,
-            messages: [{ role: 'user', content: prompt }]
+            contents: [{ role: 'user', parts: [{ text: prompt }] }],
+            systemInstruction: { parts: [{ text: system }] },
+            generationConfig: { maxOutputTokens: 4096 }
           },
           {
             timeout: 90000,
-            headers: {
-              'x-api-key': aiKey,
-              'anthropic-version': '2023-06-01',
-              'content-type': 'application/json'
-            }
+            headers: { 'content-type': 'application/json' }
           }
         );
 
-        let resultText = response.data?.content?.[0]?.text;
+        let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
         if (!resultText) throw new Error('Empty response from AI');
 
         resultText = resultText.trim();
@@ -550,7 +540,7 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
         }
       } catch (err) {
         console.error('AI personalize batch error:', err.response?.data || err.message);
-        const errMsg = parseAnthropicError(err);
+        const errMsg = parseGeminiError(err);
         const failedBatch = batch.map(r => ({ email: r.email, subject: '', body: '', error: errMsg }));
         results.push(...failedBatch);
         sendEvent({ type: 'batch_error', batchNum, error: errMsg, failedEmails: batch.map(r => r.email) });
@@ -561,7 +551,7 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
     res.end();
   } catch (err) {
     console.error('Personalize fatal error:', err);
-    sendEvent({ type: 'error', error: parseAnthropicError(err) });
+    sendEvent({ type: 'error', error: parseGeminiError(err) });
     res.end();
   } finally {
     if (release) release();
@@ -1570,7 +1560,7 @@ app.post('/api/ai/generate-followup', async (req, res) => {
   if (!recipientName) return res.status(400).json({ error: 'Recipient name is required' });
 
   let aiKey;
-  try { aiKey = await getAnthropicKey(); } catch (err) {
+  try { aiKey = await getGeminiKey(); } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.' });
   }
   if (!aiKey) {
@@ -1605,11 +1595,11 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
   }
 
   try {
-    const result = await callAnthropicJSON('Write the follow-up email.', system, 30000);
+    const result = await callGeminiJSON('Write the follow-up email.', system, 30000);
     res.json({ followUp: result });
   } catch (err) {
     console.error('AI follow-up error:', err.response?.data || err.message);
-    const msg = parseAnthropicError(err);
+    const msg = parseGeminiError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
