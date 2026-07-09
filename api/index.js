@@ -881,6 +881,23 @@ app.get('/api/campaigns', async (req, res) => {
       .select('campaign_id, recipient_email, status')
       .in('campaign_id', ids);
 
+    // Batch-fetch recipient metadata (name, business)
+    const uniqueEmails = [...new Set(sentRows.map(s => s.recipient_email))];
+    let recipientMetadata = [];
+    if (uniqueEmails.length > 0) {
+      try {
+        const { data } = await supabase
+          .from('recipients')
+          .select('email, name, business')
+          .in('email', uniqueEmails);
+        recipientMetadata = data || [];
+      } catch (_) { /* ignore errors */ }
+    }
+    const recipientMetadataMap = {};
+    for (const r of recipientMetadata) {
+      recipientMetadataMap[r.email] = r;
+    }
+
     // Group by campaign
     const sentByCampaign = {};
     for (const s of sentRows || []) {
@@ -916,25 +933,31 @@ app.get('/api/campaigns', async (req, res) => {
       result.push({
         id: c.id,
         subject: c.subject,
+        body: c.body,
         status: c.status,
         created_at: c.created_at,
         sentCount: sent.filter(s => s.status === 'sent').length || 0,
         openedCount: sent.filter(s => s.opened_at).length || 0,
         totalRecipients: sent.length || 0,
         hasFollowUps: followUps.length > 0,
-        recipients: sent.map(s => ({
-          email: s.recipient_email,
-          account: s.account_email,
-          status: s.status,
-          opened_at: s.opened_at,
-          sent_at: s.sent_at,
-          replied: s.replied || false,
-          replied_at: s.replied_at,
-          tag: s.tag || null,
-          bounced: s.bounced || false,
-          bounce_reason: s.bounce_reason || null,
-          followUpStatus: !followUps.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
-        })) || [],
+        recipients: sent.map(s => {
+          const meta = recipientMetadataMap[s.recipient_email] || {};
+          return {
+            email: s.recipient_email,
+            name: meta.name || 'Unknown',
+            business: meta.business || 'N/A',
+            account: s.account_email,
+            status: s.status,
+            opened_at: s.opened_at,
+            sent_at: s.sent_at,
+            replied: s.replied || false,
+            replied_at: s.replied_at,
+            tag: s.tag || null,
+            bounced: s.bounced || false,
+            bounce_reason: s.bounce_reason || null,
+            followUpStatus: !followUps.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
+          };
+        }) || [],
         followUps: followUps || []
       });
     }

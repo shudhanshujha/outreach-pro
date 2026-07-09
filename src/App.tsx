@@ -330,6 +330,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   const [_actionLoading, _setActionLoading] = useState<string | null>(null);
   const [selectedRecipients, setSelectedRecipients] = useState<Record<string, Set<string>>>({});
+  const [previewEmail, setPreviewEmail] = useState<{ subject: string; body: string; to: string } | null>(null);
 
   const handleStopFollowUp = async (campaignId: string, email: string) => {
     _setActionLoading(email);
@@ -1646,7 +1647,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                               {new Date(c.created_at).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric', hour: '2-digit', minute: '2-digit' })}
                               {' · '}{c.totalRecipients} recipients · {c.sentCount} sent · {c.openedCount} opened
                               {c.hasFollowUps && (
-                                <> · {c.recipients.filter((r: any) => r.followUpStatus === 'running').length} running · {c.recipients.filter((r: any) => r.followUpStatus === 'stopped').length} stopped</>
+                                <> · {(c.recipients || []).filter((r: any) => r.followUpStatus === 'running').length} running · {(c.recipients || []).filter((r: any) => r.followUpStatus === 'stopped').length} stopped</>
                               )}
                             </p>
                           </div>
@@ -1670,6 +1671,25 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       {/* Expanded details */}
                       {expandedCampaign === c.id && (
                         <div className="border-t border-slate-800/40 p-5 space-y-6">
+                          {/* Initial Email Template */}
+                          <div className="bg-slate-950/40 p-4 rounded-xl border border-slate-800/40 space-y-3">
+                            <div className="flex items-center justify-between border-b border-slate-800/60 pb-2">
+                              <h3 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Initial Email Template</h3>
+                            </div>
+                            <div className="space-y-2">
+                              <div>
+                                <span className="text-[10px] text-slate-600 font-bold block uppercase tracking-wider">Subject</span>
+                                <p className="text-xs font-bold text-slate-300 mt-0.5">{c.subject || '(No Subject)'}</p>
+                              </div>
+                              <div>
+                                <span className="text-[10px] text-slate-600 font-bold block uppercase tracking-wider">Body Template</span>
+                                <div 
+                                  className="text-xs text-slate-400 mt-1 border border-slate-900 bg-black/40 p-3 rounded-lg overflow-x-auto font-sans"
+                                  dangerouslySetInnerHTML={{ __html: c.body || '<i>No body content</i>' }} 
+                                />
+                              </div>
+                            </div>
+                          </div>
                           {/* Follow-up sequence used */}
                           {c.followUps?.length > 0 && (
                             <div>
@@ -1697,17 +1717,17 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <button
                                   onClick={() => {
                                     const sel = selectedRecipients[c.id] || new Set();
-                                    if (sel.size === c.recipients.length) {
+                                    if (sel.size === (c.recipients || []).length) {
                                       const next = { ...selectedRecipients, [c.id]: new Set() };
                                       setSelectedRecipients(next);
                                     } else {
-                                      const next = { ...selectedRecipients, [c.id]: new Set(c.recipients.map((r: any) => r.email)) };
+                                      const next = { ...selectedRecipients, [c.id]: new Set((c.recipients || []).map((r: any) => r.email)) };
                                       setSelectedRecipients(next);
                                     }
                                   }}
                                   className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 uppercase tracking-widest"
                                 >
-                                  {(selectedRecipients[c.id] || new Set()).size === c.recipients.length ? 'Deselect All' : 'Select All'}
+                                  {(selectedRecipients[c.id] || new Set()).size === (c.recipients || []).length ? 'Deselect All' : 'Select All'}
                                 </button>
                               </div>
                             </div>
@@ -1751,13 +1771,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                       <th className="px-3 py-2 text-left w-8">
                                         <input
                                           type="checkbox"
-                                          checked={c.recipients.length > 0 && (selectedRecipients[c.id] || new Set()).size === c.recipients.length}
+                                          checked={(c.recipients || []).length > 0 && (selectedRecipients[c.id] || new Set()).size === (c.recipients || []).length}
                                           onChange={() => {
                                             const sel = selectedRecipients[c.id] || new Set();
-                                            if (sel.size === c.recipients.length) {
+                                            if (sel.size === (c.recipients || []).length) {
                                               setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
                                             } else {
-                                              setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set(c.recipients.map((r: any) => r.email)) }));
+                                              setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set((c.recipients || []).map((r: any) => r.email)) }));
                                             }
                                           }}
                                           className="accent-indigo-500"
@@ -1774,7 +1794,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                     </tr>
                                   </thead>
                                   <tbody className="divide-y divide-slate-800/20">
-                                    {c.recipients.map((r: any, i: number) => (
+                                    {(c.recipients || []).map((r: any, i: number) => (
                                       <tr key={i} className={`hover:bg-white/[0.02] transition-all ${(selectedRecipients[c.id] || new Set()).has(r.email) ? 'bg-indigo-600/5' : ''}`}>
                                         <td className="px-3 py-2">
                                           <input
@@ -1866,6 +1886,22 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                         </td>
                                         <td className="px-3 py-2">
                                           <div className="flex items-center gap-1">
+                                            <button
+                                              onClick={() => {
+                                                const subst = { name: r.name || 'there', business: r.business || 'your business' };
+                                                const compile = (tmpl: string) => tmpl.replace(/{{\s*(\w+)\s*}}/g, (_, k) => subst[k] || '');
+                                                
+                                                setPreviewEmail({
+                                                  to: r.email,
+                                                  subject: compile(c.subject || ''),
+                                                  body: compile(c.body || '')
+                                                });
+                                              }}
+                                              className="p-1.5 rounded-lg text-emerald-500 hover:bg-emerald-500/10 hover:text-emerald-400 transition-all"
+                                              title="Preview sent email"
+                                            >
+                                              <Eye className="w-3.5 h-3.5" />
+                                            </button>
                                             <button
                                               onClick={() => handleStartFollowUp(c.id, r.email)}
                                               disabled={_actionLoading === r.email}
@@ -2795,6 +2831,51 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 <button onClick={handleDetectReplies} className="flex-1 bg-emerald-600 hover:bg-emerald-500 py-3 rounded-xl font-bold text-xs text-white shadow-lg shadow-emerald-500/20 transition-all">Scan Again</button>
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* Preview Email Modal */}
+      {previewEmail && (
+        <div className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-[#111113] border border-slate-800 rounded-3xl w-full max-w-2xl p-6 space-y-6 shadow-2xl animate-in zoom-in-95 duration-200 flex flex-col max-h-[90vh]">
+            <div className="flex justify-between items-center border-b border-slate-800/60 pb-4 flex-shrink-0">
+              <div>
+                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                  <Eye className="w-5 h-5 text-emerald-400" />
+                  Email Preview
+                </h3>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Previewing the email sent/scheduled to <span className="text-slate-300 font-medium">{previewEmail.to}</span>.
+                </p>
+              </div>
+              <button onClick={() => setPreviewEmail(null)} className="text-slate-500 hover:text-slate-300">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+              <div>
+                <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Subject</span>
+                <p className="text-sm font-bold text-white bg-slate-950 px-3 py-2 rounded-lg border border-slate-850 mt-1">{previewEmail.subject || '(No Subject)'}</p>
+              </div>
+              <div>
+                <span className="text-[10px] text-slate-500 font-bold block uppercase tracking-wider">Body Content</span>
+                <div 
+                  className="text-xs text-slate-300 mt-1 border border-slate-900 bg-slate-950 p-4 rounded-xl overflow-x-auto font-sans leading-relaxed min-h-[150px]"
+                  dangerouslySetInnerHTML={{ __html: previewEmail.body || '<i>No body content</i>' }} 
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-3 border-t border-slate-800/60 pt-4 flex-shrink-0">
+              <button 
+                onClick={() => setPreviewEmail(null)} 
+                className="flex-1 bg-slate-900 border border-slate-800 hover:bg-slate-800 py-3 rounded-xl font-bold text-xs text-slate-300 transition-all"
+              >
+                Close Preview
+              </button>
+            </div>
           </div>
         </div>
       )}
