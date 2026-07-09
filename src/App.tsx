@@ -262,16 +262,16 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [newAppPassword, setNewAppPassword] = useState('');
 
   // Settings API states
-  const [settingsStatus, setSettingsStatus] = useState<{ BREVO_API_KEY: boolean; GEMINI_API_KEY: boolean; APOLLO_API_KEY: boolean }>({
+  const [settingsStatus, setSettingsStatus] = useState<{ BREVO_API_KEY: boolean; GROQ_API_KEY: boolean; APOLLO_API_KEY: boolean }>({
     BREVO_API_KEY: false,
-    GEMINI_API_KEY: false,
+    GROQ_API_KEY: false,
     APOLLO_API_KEY: false
   });
   const [tempBrevoKey, setTempBrevoKey] = useState('');
-  const [tempGeminiKey, setTempGeminiKey] = useState('');
+  const [tempGroqKey, setTempGroqKey] = useState('');
   const [tempApolloKey, setTempApolloKey] = useState('');
   const [savingBrevo, setSavingBrevo] = useState(false);
-  const [savingGemini, setSavingGemini] = useState(false);
+  const [savingGroq, setSavingGroq] = useState(false);
   const [savingApollo, setSavingApollo] = useState(false);
 
   // CSV Import mapping states
@@ -429,24 +429,24 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
   };
 
-  const handleSaveSetting = async (key: 'BREVO_API_KEY' | 'GEMINI_API_KEY' | 'APOLLO_API_KEY', value: string) => {
+  const handleSaveSetting = async (key: 'BREVO_API_KEY' | 'GROQ_API_KEY' | 'APOLLO_API_KEY', value: string) => {
     if (!value) return alert('Please enter a key value');
     if (key === 'BREVO_API_KEY') setSavingBrevo(true);
-    else if (key === 'GEMINI_API_KEY') setSavingGemini(true);
+    else if (key === 'GROQ_API_KEY') setSavingGroq(true);
     else setSavingApollo(true);
     
     try {
       await axios.post(`${API_BASE_URL}/api/settings`, { key, value });
       alert('Key saved successfully!');
       if (key === 'BREVO_API_KEY') setTempBrevoKey('');
-      else if (key === 'GEMINI_API_KEY') setTempGeminiKey('');
+      else if (key === 'GROQ_API_KEY') setTempGroqKey('');
       else setTempApolloKey('');
       fetchSettingsStatus();
     } catch (err: any) {
       alert(err.response?.data?.error || 'Failed to save key');
     } finally {
       if (key === 'BREVO_API_KEY') setSavingBrevo(false);
-      else if (key === 'GEMINI_API_KEY') setSavingGemini(false);
+      else if (key === 'GROQ_API_KEY') setSavingGroq(false);
       else setSavingApollo(false);
     }
   };
@@ -482,8 +482,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
       setShowCsvModal(true);
 
-      // Call Gemini for smart mapping if Gemini key is active
-      if (settingsStatus.GEMINI_API_KEY) {
+      // Call Groq for smart mapping if Groq key is active
+      if (settingsStatus.GROQ_API_KEY) {
         setMappingLoading(true);
         try {
           const samples = dataRows.slice(0, 5).map(row => row.slice(0, headers.length));
@@ -548,8 +548,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handlePersonalize = async () => {
     if (!pitch.trim()) return;
-    if (!settingsStatus.GEMINI_API_KEY) {
-      return alert('AI key is not configured.\n\nPlease go to Settings \u2192 AI Settings and add your key from Google AI Studio.');
+    if (!settingsStatus.GROQ_API_KEY) {
+      return alert('AI key is not configured.\n\nPlease go to Settings \u2192 AI Settings and add your key from Groq.');
     }
     setPersonalizing(true);
     setPersonalizeProgress(null);
@@ -663,7 +663,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   };
 
   const handleGenerateFollowUp = async (index: number) => {
-    if (!settingsStatus.GEMINI_API_KEY) {
+    if (!settingsStatus.GROQ_API_KEY) {
       return alert('AI key is not configured.\n\nPlease go to Settings → AI Settings and add your key.');
     }
     setGeneratingFollowUp(true);
@@ -744,8 +744,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleAiGenerateEmail = async () => {
     if (!aiPrompt.trim()) return alert('Please enter what you want the email to say.');
-    if (!settingsStatus.GEMINI_API_KEY) {
-      return alert('Gemini AI key is not configured.\n\nPlease go to Settings → Gemini AI Settings and add your key from Google AI Studio.');
+    if (!settingsStatus.GROQ_API_KEY) {
+      return alert('AI key is not configured.\n\nPlease go to Settings → AI Settings to add your key from Groq.');
     }
     setAiGenerating(true);
     try {
@@ -1066,7 +1066,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   <div className="flex items-center justify-between mb-4">
                     <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
                       <Sparkles className="w-4 h-4 text-indigo-400" /> AI Personalize
-                      {settingsStatus.GEMINI_API_KEY ? (
+                      {settingsStatus.GROQ_API_KEY ? (
                         <span className="text-[9px] font-bold text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full">AI Ready</span>
                       ) : (
                         <span className="text-[9px] font-bold text-rose-400 bg-rose-500/10 border border-rose-500/20 px-2 py-0.5 rounded-full">Key Missing</span>
@@ -1074,7 +1074,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     </h2>
                     <button
                       onClick={() => {
-                        if (!settingsStatus.GEMINI_API_KEY) return alert('Gemini AI key is not configured.\n\nGo to Settings → Gemini AI Settings to add your key.');
+                        if (!settingsStatus.GROQ_API_KEY) return alert('AI key is not configured.\n\nGo to Settings → AI Settings to add your key.');
                         if (!pitch.trim()) return alert('Describe your pitch first');
                         if (parsedRecipients.length === 0) return alert('Add recipients first');
                         setPersonalizedData({});
@@ -1153,7 +1153,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       </button>
                       <button 
                         onClick={() => {
-                          if (!settingsStatus.GEMINI_API_KEY) return alert('Gemini AI key is not configured.\n\nGo to Settings → Gemini AI Settings to add your key.');
+                        if (!settingsStatus.GROQ_API_KEY) return alert('AI key is not configured.\n\nGo to Settings → AI Settings to add your key.');
                           setAiResultSubject('');
                           setAiResultBody('');
                           setShowAiModal(true);
@@ -1162,7 +1162,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       >
                         <Sparkles className="w-3.5 h-3.5" />
                         Write with AI
-                        {!settingsStatus.GEMINI_API_KEY && <span className="text-[9px] text-rose-400">(key missing)</span>}
+                        {!settingsStatus.GROQ_API_KEY && <span className="text-[9px] text-rose-400">(key missing)</span>}
                       </button>
                     </div>
                   </div>
@@ -1184,7 +1184,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             onClick={() => handleGenerateFollowUp(idx)}
                             disabled={generatingFollowUp || !pitch.trim()}
                             className="text-[10px] flex items-center gap-1 font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all disabled:opacity-50 flex-shrink-0"
-                            title={!pitch.trim() ? 'Add pitch text above to generate AI follow-ups' : !settingsStatus.GEMINI_API_KEY ? 'AI key not configured — go to Settings' : 'Generate this follow-up with AI'}
+                            title={!pitch.trim() ? 'Add pitch text above to generate AI follow-ups' : !settingsStatus.GROQ_API_KEY ? 'AI key not configured — go to Settings' : 'Generate this follow-up with AI'}
                           >
                             {generatingFollowUp && generatingFollowUpIdx === idx ? (
                               <Loader2 className="w-3 h-3 animate-spin" />
@@ -2308,27 +2308,27 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 <div className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm space-y-4">
                   <div className="flex items-center justify-between">
                     <h3 className="text-lg font-bold text-white">AI Settings</h3>
-                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.GEMINI_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
-                      {settingsStatus.GEMINI_API_KEY ? 'Connected' : 'Disconnected'}
+                    <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.GROQ_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
+                      {settingsStatus.GROQ_API_KEY ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Used to intelligently map CSV headers and write high-converting cold email copy (Google Gemini).
+                    Used to intelligently map CSV headers and write high-converting cold email copy (Groq).
                   </p>
                   <div className="space-y-2">
                     <input
                       type="password"
-                      placeholder="Paste Google Gemini API Key"
-                      value={tempGeminiKey}
-                      onChange={e => setTempGeminiKey(e.target.value)}
+                      placeholder="Paste Groq API Key"
+                      value={tempGroqKey}
+                      onChange={e => setTempGroqKey(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
                     />
                     <button
-                      onClick={() => handleSaveSetting('GEMINI_API_KEY', tempGeminiKey)}
-                      disabled={savingGemini}
+                      onClick={() => handleSaveSetting('GROQ_API_KEY', tempGroqKey)}
+                      disabled={savingGroq}
                       className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg transition-all flex items-center justify-center gap-2"
                     >
-                      {savingGemini ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+                      {savingGroq ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
                       Save AI Key
                     </button>
                   </div>

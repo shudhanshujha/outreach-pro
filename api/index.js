@@ -42,9 +42,9 @@ async function getBrevoKey() {
   return _brevoKeyCache;
 }
 
-let _geminiKeyCache = null;
-let _geminiKeyCacheTime = 0;
-const GEMINI_KEY_TTL = 5 * 60 * 1000; // 5 minutes
+let _groqKeyCache = null;
+let _groqKeyCacheTime = 0;
+const GROQ_KEY_TTL = 5 * 60 * 1000; // 5 minutes
 
 let _apolloKeyCache = null;
 let _apolloKeyCacheTime = 0;
@@ -64,25 +64,25 @@ async function getApolloKey() {
   return _apolloKeyCache;
 }
 
-async function getGeminiKey() {
-  if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
+async function getGroqKey() {
+  if (process.env.GROQ_API_KEY) return process.env.GROQ_API_KEY;
 
   const now = Date.now();
-  if (_geminiKeyCache && (now - _geminiKeyCacheTime) < GEMINI_KEY_TTL) {
-    return _geminiKeyCache;
+  if (_groqKeyCache && (now - _groqKeyCacheTime) < GROQ_KEY_TTL) {
+    return _groqKeyCache;
   }
 
-  const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'GEMINI_API_KEY').maybeSingle();
+  const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'GROQ_API_KEY').maybeSingle();
   if (error) throw new Error('Failed to fetch AI API key from Supabase: ' + error.message);
 
-  _geminiKeyCache = data?.value || null;
-  _geminiKeyCacheTime = now;
+  _groqKeyCache = data?.value || null;
+  _groqKeyCacheTime = now;
   console.log('AI API key refreshed from Supabase at', new Date().toISOString());
-  return _geminiKeyCache;
+  return _groqKeyCache;
 }
 
-// Parse Gemini API errors into human-readable messages
-function parseGeminiError(err) {
+// Parse Groq API errors into human-readable messages
+function parseGroqError(err) {
   const status = err.response?.status;
   const detail = err.response?.data?.error?.message || err.message || 'Unknown error';
   if (status === 400) {
@@ -118,31 +118,38 @@ function aiConcurrencyGuard() {
   return () => { _activeAiRequests = Math.max(0, _activeAiRequests - 1); };
 }
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const GROQ_MODEL = 'llama3-70b-8192';
+const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
-// Helper to call Gemini with a prompt and get text back
-async function callGemini(prompt, system, timeout = 30000) {
-  const key = await getGeminiKey();
-  const response = await axios.post(GEMINI_API_BASE + '/' + GEMINI_MODEL + ':generateContent?key=' + key,
+// Helper to call Groq with a prompt and get text back
+async function callGroq(prompt, system, timeout = 30000) {
+  const key = await getGroqKey();
+  const response = await axios.post(GROQ_API_BASE,
     {
-      contents: [{ role: 'user', parts: [{ text: prompt }] }],
-      systemInstruction: { parts: [{ text: system }] },
-      generationConfig: { maxOutputTokens: 4096 }
+      model: GROQ_MODEL,
+      messages: [
+        { role: 'system', content: system },
+        { role: 'user', content: prompt }
+      ],
+      temperature: 0.7,
+      max_tokens: 4096
     },
     {
       timeout,
-      headers: { 'content-type': 'application/json' }
+      headers: {
+        'content-type': 'application/json',
+        'Authorization': 'Bearer ' + key
+      }
     }
   );
-  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+  const text = response.data?.choices?.[0]?.message?.content;
   if (!text) throw new Error('Empty response from AI');
   return text;
 }
 
-// Helper to call Gemini and parse JSON response
-async function callGeminiJSON(prompt, system, timeout = 30000) {
-  const text = await callGemini(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
+// Helper to call Groq and parse JSON response
+async function callGroqJSON(prompt, system, timeout = 30000) {
+  const text = await callGroq(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
   let cleaned = text.trim();
   if (cleaned.startsWith('```')) {
     cleaned = cleaned.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
@@ -286,13 +293,13 @@ app.get('/api/settings', async (req, res) => {
     
     const keys = data || [];
     const brevoSet = !!process.env.BREVO_API_KEY || keys.some(d => d.key === 'BREVO_API_KEY');
-    const geminiSet = !!process.env.GEMINI_API_KEY || keys.some(d => d.key === 'GEMINI_API_KEY');
+    const groqSet = !!process.env.GROQ_API_KEY || keys.some(d => d.key === 'GROQ_API_KEY');
     const apolloSet = !!process.env.APOLLO_API_KEY || keys.some(d => d.key === 'APOLLO_API_KEY');
     
     res.json({
       settings: {
         BREVO_API_KEY: brevoSet,
-        GEMINI_API_KEY: geminiSet,
+        GROQ_API_KEY: groqSet,
         APOLLO_API_KEY: apolloSet
       }
     });
@@ -307,7 +314,7 @@ app.post('/api/settings', async (req, res) => {
     return res.status(400).json({ error: 'Key and value are required' });
   }
   
-  if (key !== 'BREVO_API_KEY' && key !== 'GEMINI_API_KEY' && key !== 'APOLLO_API_KEY') {
+  if (key !== 'BREVO_API_KEY' && key !== 'GROQ_API_KEY' && key !== 'APOLLO_API_KEY') {
     return res.status(400).json({ error: 'Invalid setting key' });
   }
   
@@ -320,9 +327,9 @@ app.post('/api/settings', async (req, res) => {
       _brevoKeyCacheTime = Date.now();
       _brevoAccountEmail = null; // invalidate Brevo account cache too
       _brevoAccountCacheTime = 0;
-    } else if (key === 'GEMINI_API_KEY') {
-      _geminiKeyCache = value;
-      _geminiKeyCacheTime = Date.now();
+    } else if (key === 'GROQ_API_KEY') {
+      _groqKeyCache = value;
+      _groqKeyCacheTime = Date.now();
     } else if (key === 'APOLLO_API_KEY') {
       _apolloKeyCache = value;
       _apolloKeyCacheTime = Date.now();
@@ -335,7 +342,7 @@ app.post('/api/settings', async (req, res) => {
 });
 
 // ============================================================
-// AI UTILITIES (Anthropic Claude)
+// AI UTILITIES (Groq)
 // ============================================================
 app.post('/api/ai/map-csv', async (req, res) => {
   const { headers, samples } = req.body;
@@ -345,7 +352,7 @@ app.post('/api/ai/map-csv', async (req, res) => {
 
   let aiKey;
   try {
-    aiKey = await getGeminiKey();
+    aiKey = await getGroqKey();
   } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
@@ -370,11 +377,11 @@ Return a JSON object with keys "emailColumn", "nameColumn", "businessColumn" usi
   }
 
   try {
-    const mapping = await callGeminiJSON(prompt, '', 15000);
+    const mapping = await callGroqJSON(prompt, '', 15000);
     res.json(mapping);
   } catch (err) {
     console.error('AI mapping failed:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    const msg = parseGroqError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -389,7 +396,7 @@ app.post('/api/ai/write-email', async (req, res) => {
 
   let aiKey;
   try {
-    aiKey = await getGeminiKey();
+    aiKey = await getGroqKey();
   } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
@@ -417,11 +424,11 @@ Return a JSON object with keys "subject" and "body".`;
   }
 
   try {
-    const emailTemplate = await callGeminiJSON(userPrompt, system, 20000);
+    const emailTemplate = await callGroqJSON(userPrompt, system, 20000);
     res.json(emailTemplate);
   } catch (err) {
     console.error('AI write email failed:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    const msg = parseGroqError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -444,7 +451,7 @@ app.post('/api/ai/personalize', async (req, res) => {
   }
 
   let aiKey;
-  try { aiKey = await getGeminiKey(); } catch (err) {
+  try { aiKey = await getGroqKey(); } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
   if (!aiKey) {
@@ -503,19 +510,26 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
       }).join('\n\n');
 
       try {
-        const response = await axios.post(GEMINI_API_BASE + '/' + GEMINI_MODEL + ':generateContent?key=' + aiKey,
+        const response = await axios.post(GROQ_API_BASE,
           {
-            contents: [{ role: 'user', parts: [{ text: prompt }] }],
-            systemInstruction: { parts: [{ text: system }] },
-            generationConfig: { maxOutputTokens: 4096 }
+            model: GROQ_MODEL,
+            messages: [
+              { role: 'system', content: system },
+              { role: 'user', content: prompt }
+            ],
+            temperature: 0.7,
+            max_tokens: 4096
           },
           {
             timeout: 90000,
-            headers: { 'content-type': 'application/json' }
+            headers: {
+              'content-type': 'application/json',
+              'Authorization': 'Bearer ' + aiKey
+            }
           }
         );
 
-        let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
+        let resultText = response.data?.choices?.[0]?.message?.content;
         if (!resultText) throw new Error('Empty response from AI');
 
         resultText = resultText.trim();
@@ -530,7 +544,7 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
         }
       } catch (err) {
         console.error('AI personalize batch error:', err.response?.data || err.message);
-        const errMsg = parseGeminiError(err);
+        const errMsg = parseGroqError(err);
         const failedBatch = batch.map(r => ({ email: r.email, subject: '', body: '', error: errMsg }));
         results.push(...failedBatch);
         sendEvent({ type: 'batch_error', batchNum, error: errMsg, failedEmails: batch.map(r => r.email) });
@@ -541,7 +555,7 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
     res.end();
   } catch (err) {
     console.error('Personalize fatal error:', err);
-    sendEvent({ type: 'error', error: parseGeminiError(err) });
+    sendEvent({ type: 'error', error: parseGroqError(err) });
     res.end();
   } finally {
     if (release) release();
@@ -1605,7 +1619,7 @@ app.post('/api/ai/generate-followup', async (req, res) => {
   if (!recipientName) return res.status(400).json({ error: 'Recipient name is required' });
 
   let aiKey;
-  try { aiKey = await getGeminiKey(); } catch (err) {
+  try { aiKey = await getGroqKey(); } catch (err) {
     return res.status(500).json({ error: 'AI API key check failed.' });
   }
   if (!aiKey) {
@@ -1640,11 +1654,11 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
   }
 
   try {
-    const result = await callGeminiJSON('Write the follow-up email.', system, 30000);
+    const result = await callGroqJSON('Write the follow-up email.', system, 30000);
     res.json({ followUp: result });
   } catch (err) {
     console.error('AI follow-up error:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    const msg = parseGroqError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
