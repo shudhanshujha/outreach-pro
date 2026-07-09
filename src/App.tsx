@@ -1888,7 +1888,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                           <div className="flex items-center gap-1">
                                             <button
                                               onClick={() => {
-                                                const subst = { name: r.name || 'there', business: r.business || 'your business' };
+                                                const subst: Record<string, string> = { name: r.name || 'there', business: r.business || 'your business' };
                                                 const compile = (tmpl: string) => tmpl.replace(/{{\s*(\w+)\s*}}/g, (_, k) => subst[k] || '');
                                                 
                                                 setPreviewEmail({
