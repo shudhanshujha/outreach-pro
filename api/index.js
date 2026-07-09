@@ -270,25 +270,25 @@ app.get('/', (req, res) => {
 });
 
 // ============================================================
-// CRON KEEPALIVE — Vercel cron pings this, which pings Render
+// KEEPALIVE — prevent Render free tier from spinning down
 // ============================================================
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
 });
 
-app.get('/api/cron-keepalive', async (req, res) => {
-  // Vercel Cron sends x-vercel-cron header — only allow internal calls
-  if (!req.headers['x-vercel-cron']) {
-    return res.status(403).json({ error: 'Forbidden' });
-  }
-  const target = process.env.BACKEND_URL || 'https://outreach-pro-0fip.onrender.com';
-  try {
-    const resp = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(15000) });
-    res.json({ ok: true, backendStatus: resp.status });
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});
+// Only runs when deployed ON Render itself (not locally)
+if (process.env.RENDER) {
+  const target = process.env.BACKEND_URL || `https://outreach-pro-0fip.onrender.com`;
+  setInterval(async () => {
+    try {
+      const resp = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(15000) });
+      console.log(`[Keepalive] Ping OK — ${resp.status}`);
+    } catch (err) {
+      console.warn(`[Keepalive] Ping failed: ${err.message}`);
+    }
+  }, 10 * 60 * 1000);
+  console.log(`[Keepalive] Enabled — pinging ${target} every 10min`);
+}
 
 // ============================================================
 // SETTINGS
