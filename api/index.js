@@ -64,7 +64,7 @@ async function getApolloKey() {
   return _apolloKeyCache;
 }
 
-async function getGeminiKey() {
+async function getAnthropicKey() {
   if (process.env.GEMINI_API_KEY) return process.env.GEMINI_API_KEY;
 
   const now = Date.now();
@@ -73,28 +73,28 @@ async function getGeminiKey() {
   }
 
   const { data, error } = await supabase.from('app_settings').select('value').eq('key', 'GEMINI_API_KEY').maybeSingle();
-  if (error) throw new Error('Failed to fetch GEMINI_API_KEY from Supabase: ' + error.message);
+  if (error) throw new Error('Failed to fetch AI API key from Supabase: ' + error.message);
 
   _geminiKeyCache = data?.value || null;
   _geminiKeyCacheTime = now;
-  console.log('Gemini API key refreshed from Supabase at', new Date().toISOString());
+  console.log('AI API key refreshed from Supabase at', new Date().toISOString());
   return _geminiKeyCache;
 }
 
-// Parse Gemini API errors into human-readable messages
-function parseGeminiError(err) {
+// Parse Anthropic API errors into human-readable messages
+function parseAnthropicError(err) {
   const status = err.response?.status;
   const detail = err.response?.data?.error?.message || err.message || 'Unknown error';
   if (status === 400) {
-    if (detail.includes('API_KEY_INVALID') || detail.includes('invalid')) {
-      return 'Invalid Gemini API key. Please update it in Settings → Gemini AI Settings.';
+    if (detail.includes('invalid') || detail.includes('api_key')) {
+      return 'Invalid AI API key. Please update it in Settings.';
     }
-    return 'Gemini request error: ' + detail;
+    return 'AI request error: ' + detail;
   }
-  if (status === 429) return 'Gemini quota exceeded. Please wait a moment and try again.';
-  if (status === 403) return 'Gemini API key lacks permission. Please check your Google AI Studio key.';
-  if (status === 503 || status === 500) return 'Gemini is temporarily unavailable. Please try again in a moment.';
-  return 'Gemini error: ' + detail;
+  if (status === 429) return 'AI quota exceeded. Please wait a moment and try again.';
+  if (status === 403) return 'AI API key lacks permission.';
+  if (status === 503 || status === 500) return 'AI service is temporarily unavailable. Please try again in a moment.';
+  return 'AI error: ' + detail;
 }
 
 // Sanitize a string for safe inclusion in AI prompts
@@ -118,8 +118,42 @@ function aiConcurrencyGuard() {
   return () => { _activeAiRequests = Math.max(0, _activeAiRequests - 1); };
 }
 
-const GEMINI_MODEL = 'gemini-2.0-flash';
-const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta/models';
+const ANTHROPIC_MODEL = 'claude-sonnet-4-20250514';
+const ANTHROPIC_API_BASE = 'https://api.anthropic.com/v1/messages';
+
+// Helper to call Anthropic with a prompt and get text back
+async function callAnthropic(prompt, system, timeout = 30000) {
+  const key = await getAnthropicKey();
+  const response = await axios.post(ANTHROPIC_API_BASE,
+    {
+      model: ANTHROPIC_MODEL,
+      max_tokens: 4096,
+      system,
+      messages: [{ role: 'user', content: prompt }]
+    },
+    {
+      timeout,
+      headers: {
+        'x-api-key': key,
+        'anthropic-version': '2023-06-01',
+        'content-type': 'application/json'
+      }
+    }
+  );
+  const text = response.data?.content?.[0]?.text;
+  if (!text) throw new Error('Empty response from AI');
+  return text;
+}
+
+// Helper to call Anthropic and parse JSON response
+async function callAnthropicJSON(prompt, system, timeout = 30000) {
+  const text = await callAnthropic(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
+  let cleaned = text.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+  }
+  return JSON.parse(cleaned);
+}
 
 
 // Only use tracking pixel if we have a real public HTTPS URL (not localhost)
@@ -316,7 +350,7 @@ app.post('/api/settings', async (req, res) => {
 });
 
 // ============================================================
-// AI UTILITIES (GEMINI)
+// AI UTILITIES (Anthropic Claude)
 // ============================================================
 app.post('/api/ai/map-csv', async (req, res) => {
   const { headers, samples } = req.body;
@@ -324,33 +358,24 @@ app.post('/api/ai/map-csv', async (req, res) => {
     return res.status(400).json({ error: 'CSV headers are required' });
   }
 
-  let geminiKey;
+  let aiKey;
   try {
-    geminiKey = await getGeminiKey();
+    aiKey = await getAnthropicKey();
   } catch (err) {
-    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+    return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
 
-  if (!geminiKey) {
-    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+  if (!aiKey) {
+    return res.status(400).json({ error: 'AI API key is not configured. Please add it in settings.' });
   }
 
-  const prompt = `You are a data assistant mapping CSV column headers to cold outreach recipient properties.
-We need to map columns from the uploaded CSV to the following target fields:
-1. "email": The recipient's email address.
-2. "name": The recipient's full name, first name, or name.
-3. "business": The recipient's company, organization, or business name.
+  const prompt = `Map these CSV headers to our target fields: "email", "name", "business".
 
-Here are the CSV headers:
-${JSON.stringify(headers)}
+CSV headers: ${JSON.stringify(headers)}
 
-Here are some sample rows of data (each element corresponds to the header at the same index):
-${JSON.stringify(samples || [])}
+Sample rows: ${JSON.stringify(samples || [])}
 
-Please analyze the headers and sample values and map them to our targets.
-Respond with a raw JSON object ONLY, containing the keys "emailColumn", "nameColumn", and "businessColumn".
-The values must be the exact header names from the CSV headers above, or null if you cannot find a suitable match.
-Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
+Return a JSON object with keys "emailColumn", "nameColumn", "businessColumn" using exact header names from above, or null if no match.`;
 
   let release;
   try {
@@ -360,28 +385,11 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
   }
 
   try {
-    const response = await axios.post(
-      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
-      {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' }
-      },
-      { timeout: 15000, headers: { 'X-Goog-Api-Key': geminiKey } }
-    );
-
-    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) throw new Error('Empty response from Gemini API');
-
-    resultText = resultText.trim();
-    if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-    }
-
-    const mapping = JSON.parse(resultText);
+    const mapping = await callAnthropicJSON(prompt, '', 15000);
     res.json(mapping);
   } catch (err) {
-    console.error('Gemini mapping failed:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    console.error('AI mapping failed:', err.response?.data || err.message);
+    const msg = parseAnthropicError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -394,30 +402,27 @@ app.post('/api/ai/write-email', async (req, res) => {
     return res.status(400).json({ error: 'Prompt is required' });
   }
 
-  let geminiKey;
+  let aiKey;
   try {
-    geminiKey = await getGeminiKey();
+    aiKey = await getAnthropicKey();
   } catch (err) {
-    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+    return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
 
-  if (!geminiKey) {
-    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in settings.' });
+  if (!aiKey) {
+    return res.status(400).json({ error: 'AI API key is not configured. Please add it in settings.' });
   }
 
-  const systemInstructions = `You are an expert cold outreach strategist. Your task is to write a highly converting cold email template.
-Instructions:
-- Write both a subject line and a body.
-- You MUST use two personalization placeholders:
-  * {{name}} for the recipient's name (e.g. Hi {{name}},)
-  * {{business}} for the recipient's business/company name (e.g. I was looking at {{business}}...)
-- The body should be formatted in clean HTML (using <p> and <br /> tags for formatting, do not include <html>, <body> or <head> tags).
-- Maintain the user's requested tone: ${tone || 'professional'}
-- Maintain the user's requested length: ${length || 'medium'}
-- Do NOT output any conversational text or formatting other than the JSON object requested below.
+  const system = `You are an expert cold outreach strategist. Write a highly converting cold email template.
 
-Respond with a raw JSON object containing the keys "subject" and "body".
-Do not wrap your response in markdown code blocks like \`\`\`json. Just output the clean JSON object.`;
+Rules:
+- Write both a subject line and body.
+- Use {{name}} for recipient name and {{business}} for company name.
+- Body must be clean HTML using <p> and <br /> tags. No <html>, <body>, <head>.
+- Tone: ${tone || 'professional'}
+- Length: ${length || 'medium'}
+
+Return a JSON object with keys "subject" and "body".`;
 
   let release;
   try {
@@ -427,28 +432,11 @@ Do not wrap your response in markdown code blocks like \`\`\`json. Just output t
   }
 
   try {
-    const response = await axios.post(
-      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
-      {
-        contents: [{ parts: [{ text: `${systemInstructions}\n\nUser request for email contents: ${userPrompt}` }] }],
-        generationConfig: { responseMimeType: 'application/json' }
-      },
-      { timeout: 20000, headers: { 'X-Goog-Api-Key': geminiKey } }
-    );
-
-    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) throw new Error('Empty response from Gemini API');
-
-    resultText = resultText.trim();
-    if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-    }
-
-    const emailTemplate = JSON.parse(resultText);
+    const emailTemplate = await callAnthropicJSON(userPrompt, system, 20000);
     res.json(emailTemplate);
   } catch (err) {
-    console.error('Gemini write email failed:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    console.error('AI write email failed:', err.response?.data || err.message);
+    const msg = parseAnthropicError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();
@@ -470,19 +458,19 @@ app.post('/api/ai/personalize', async (req, res) => {
     return res.status(400).json({ error: 'Please describe what you are pitching' });
   }
 
-  let geminiKey;
-  try { geminiKey = await getGeminiKey(); } catch (err) {
-    return res.status(500).json({ error: 'Gemini API key check failed.', detail: err.message });
+  let aiKey;
+  try { aiKey = await getAnthropicKey(); } catch (err) {
+    return res.status(500).json({ error: 'AI API key check failed.', detail: err.message });
   }
-  if (!geminiKey) {
-    return res.status(400).json({ error: 'Gemini API key is not configured. Please add it in Settings.' });
+  if (!aiKey) {
+    return res.status(400).json({ error: 'AI API key is not configured. Please add it in Settings.' });
   }
 
   // Set SSE headers so the frontend can track batch progress
   res.setHeader('Content-Type', 'text/event-stream');
   res.setHeader('Cache-Control', 'no-cache');
   res.setHeader('Connection', 'keep-alive');
-  res.setHeader('X-Accel-Buffering', 'no'); // disable Nginx buffering on Render
+  res.setHeader('X-Accel-Buffering', 'no');
 
   const sendEvent = (data) => {
     res.write(`data: ${JSON.stringify(data)}\n\n`);
@@ -492,6 +480,21 @@ app.post('/api/ai/personalize', async (req, res) => {
   const BATCH = 5;
   const totalBatches = Math.ceil(recipients.length / BATCH);
   const safePitch = sanitizeForPrompt(pitch, 500);
+
+  const system = `You are a world-class cold email copywriter. Write unique, personalized cold emails for each person below.
+
+Pitch/offer: ${safePitch}
+
+Directives:
+- Completely UNIQUE email per person — no two the same.
+- Reference each person's business naturally.
+- Use ${tone} tone. Keep it ${length} length.
+- Use their name in greeting.
+- Weave the pitch as a natural solution.
+- End with a soft CTA.
+
+Return a JSON array. Each element: { "email": "their email", "subject": "subject line", "body": "<p>...</p>" }
+Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
 
   let release;
   try {
@@ -506,61 +509,34 @@ app.post('/api/ai/personalize', async (req, res) => {
       const batch = recipients.slice(i, i + BATCH);
       const batchNum = Math.floor(i / BATCH) + 1;
 
-      sendEvent({
-        type: 'progress',
-        batchNum,
-        totalBatches,
-        done: i,
-        total: recipients.length
-      });
+      sendEvent({ type: 'progress', batchNum, totalBatches, done: i, total: recipients.length });
 
-      const peopleDesc = batch.map((r, idx) => {
+      const prompt = batch.map((r, idx) => {
         const name = sanitizeForPrompt(r.name || 'Unknown', 80);
         const business = sanitizeForPrompt(r.business || 'Unknown', 100);
         return `Person ${idx + 1}:\n- Name: ${name}\n- Business: ${business}\n- Email: ${r.email}`;
       }).join('\n\n');
 
-      const prompt = `You are a world-class cold email copywriter. Your task is to write unique, personalized cold emails for each person below.
-
-THE PITCH / OFFER:
-${safePitch}
-
-DIRECTIVES:
-- Write a completely UNIQUE email for EACH person — no two emails should be the same.
-- Study each person's business name and reference their likely industry naturally.
-- The email must feel hand-written, not templated.
-- Use ${tone} tone.
-- Keep it ${length} length.
-- Address the person by name in the greeting.
-- Reference their business specifically — what they do, a challenge they face, or an opportunity.
-- Weave the pitch in as a natural solution, not a hard sell.
-- End with a soft call to action (e.g. "Would you be open to a quick call?").
-
-OUTPUT FORMAT:
-Respond with a raw JSON array ONLY. Each element must have:
-{
-  "email": "the person's email address (copy exactly)",
-  "subject": "a compelling subject line (max 10 words)",
-  "body": "full email body in clean HTML using <p> and <br /> tags. Do NOT include <html>, <body>, or <head> tags."
-}
-
-Here are the people:
-${peopleDesc}
-
-Return ONLY the JSON array, no markdown, no code fences.`;
-
       try {
-        const response = await axios.post(
-          `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
+        const response = await axios.post(ANTHROPIC_API_BASE,
           {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { responseMimeType: 'application/json' }
+            model: ANTHROPIC_MODEL,
+            max_tokens: 4096,
+            system,
+            messages: [{ role: 'user', content: prompt }]
           },
-          { timeout: 90000, headers: { 'X-Goog-Api-Key': geminiKey } }
+          {
+            timeout: 90000,
+            headers: {
+              'x-api-key': aiKey,
+              'anthropic-version': '2023-06-01',
+              'content-type': 'application/json'
+            }
+          }
         );
 
-        let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-        if (!resultText) throw new Error('Empty response from Gemini');
+        let resultText = response.data?.content?.[0]?.text;
+        if (!resultText) throw new Error('Empty response from AI');
 
         resultText = resultText.trim();
         if (resultText.startsWith('```')) {
@@ -573,10 +549,11 @@ Return ONLY the JSON array, no markdown, no code fences.`;
           sendEvent({ type: 'batch_done', batchNum, results: parsed });
         }
       } catch (err) {
-        console.error('Gemini personalize batch error:', parseGeminiError(err));
-        const failedBatch = batch.map(r => ({ email: r.email, subject: '', body: '', error: parseGeminiError(err) }));
+        console.error('AI personalize batch error:', err.response?.data || err.message);
+        const errMsg = parseAnthropicError(err);
+        const failedBatch = batch.map(r => ({ email: r.email, subject: '', body: '', error: errMsg }));
         results.push(...failedBatch);
-        sendEvent({ type: 'batch_error', batchNum, error: parseGeminiError(err), failedEmails: batch.map(r => r.email) });
+        sendEvent({ type: 'batch_error', batchNum, error: errMsg, failedEmails: batch.map(r => r.email) });
       }
     }
 
@@ -584,7 +561,7 @@ Return ONLY the JSON array, no markdown, no code fences.`;
     res.end();
   } catch (err) {
     console.error('Personalize fatal error:', err);
-    sendEvent({ type: 'error', error: parseGeminiError(err) });
+    sendEvent({ type: 'error', error: parseAnthropicError(err) });
     res.end();
   } finally {
     if (release) release();
@@ -1592,39 +1569,33 @@ app.post('/api/ai/generate-followup', async (req, res) => {
   if (!pitch) return res.status(400).json({ error: 'Pitch is required' });
   if (!recipientName) return res.status(400).json({ error: 'Recipient name is required' });
 
-  let geminiKey;
-  try { geminiKey = await getGeminiKey(); } catch (err) {
-    return res.status(500).json({ error: 'Gemini API key check failed.' });
+  let aiKey;
+  try { aiKey = await getAnthropicKey(); } catch (err) {
+    return res.status(500).json({ error: 'AI API key check failed.' });
   }
-  if (!geminiKey) {
-    return res.status(400).json({ error: 'Gemini API key is not configured.' });
+  if (!aiKey) {
+    return res.status(400).json({ error: 'AI API key is not configured.' });
   }
 
   const delayDesc = delayDays === 1 ? '1 day' : `${delayDays} days`;
-  const prompt = `You are a world-class cold email follow-up copywriter. Write a SINGLE follow-up email.
 
-CONTEXT:
-- Recipient: ${recipientName}${recipientBusiness ? ` (${recipientBusiness})` : ''}
-- Original email subject: "${originalSubject || 'N/A'}"
-- Original email body: "${(originalBody || '').slice(0, 500)}"
-- Pitch/offer: ${pitch}
-- Days since last email: ${delayDays}
+  const system = `You are a world-class cold email follow-up copywriter. Write a SINGLE follow-up email.
 
-DIRECTIVES:
-- This is the follow-up sent ${delayDesc} after the initial email.
-- Do NOT repeat the original email. Add NEW value — a different angle, new insight, or social proof.
-- Reference the previous email naturally ("Following up on my note from last week...").
-- Use the recipient's name naturally.
-- Keep it concise (3-5 sentences).
-- End with a soft CTA.
+Context: Recipient: ${recipientName}${recipientBusiness ? ` (${recipientBusiness})` : ''}
+Original subject: "${originalSubject || 'N/A'}"
+Original body excerpt: "${(originalBody || '').slice(0, 500)}"
+Pitch: ${pitch}
+Days since last email: ${delayDays}
 
-OUTPUT FORMAT: Return a raw JSON object ONLY:
-{
-  "subject": "compelling follow-up subject line (max 10 words)",
-  "body": "full email body in clean HTML using <p> and <br /> tags. Do NOT include <html>, <body>, or <head> tags."
-}
+Rules:
+- This is sent ${delayDesc} after the initial email.
+- Do NOT repeat the original email. Add NEW value.
+- Reference the previous email naturally.
+- Use the recipient's name.
+- Keep it 3-5 sentences. End with a soft CTA.
 
-Return ONLY the JSON object, no markdown, no code fences.`;
+Return a JSON object: { "subject": "...", "body": "<p>...</p>" }
+Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
 
   let release;
   try {
@@ -1634,28 +1605,11 @@ Return ONLY the JSON object, no markdown, no code fences.`;
   }
 
   try {
-    const response = await axios.post(
-      `${GEMINI_API_BASE}/${GEMINI_MODEL}:generateContent`,
-      {
-        contents: [{ parts: [{ text: prompt }] }],
-        generationConfig: { responseMimeType: 'application/json' }
-      },
-      { timeout: 30000, headers: { 'X-Goog-Api-Key': geminiKey } }
-    );
-
-    let resultText = response.data?.candidates?.[0]?.content?.parts?.[0]?.text;
-    if (!resultText) throw new Error('Empty response from Gemini');
-
-    resultText = resultText.trim();
-    if (resultText.startsWith('```')) {
-      resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-    }
-
-    const parsed = JSON.parse(resultText);
-    res.json({ followUp: parsed });
+    const result = await callAnthropicJSON('Write the follow-up email.', system, 30000);
+    res.json({ followUp: result });
   } catch (err) {
-    console.error('Gemini follow-up error:', err.response?.data || err.message);
-    const msg = parseGeminiError(err);
+    console.error('AI follow-up error:', err.response?.data || err.message);
+    const msg = parseAnthropicError(err);
     res.status(err.response?.status || 500).json({ error: msg });
   } finally {
     if (release) release();

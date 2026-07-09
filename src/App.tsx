@@ -496,7 +496,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             if (res.data.businessColumn) setMappedBusinessCol(res.data.businessColumn);
           }
         } catch (err) {
-          console.warn('Gemini smart mapping failed, using heuristic fallback', err);
+          console.warn('AI smart mapping failed, using heuristic fallback', err);
         } finally {
           setMappingLoading(false);
         }
@@ -548,7 +548,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const handlePersonalize = async () => {
     if (!pitch.trim()) return;
     if (!settingsStatus.GEMINI_API_KEY) {
-      return alert('Gemini AI key is not configured.\n\nPlease go to Settings \u2192 Gemini AI Settings and add your key from Google AI Studio.');
+      return alert('AI key is not configured.\n\nPlease go to Settings \u2192 AI Settings and add your key from Google AI Studio.');
     }
     setPersonalizing(true);
     setPersonalizeProgress(null);
@@ -663,7 +663,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   const handleGenerateFollowUp = async (index: number) => {
     if (!settingsStatus.GEMINI_API_KEY) {
-      return alert('Gemini AI key is not configured.\n\nPlease go to Settings → Gemini AI Settings and add your key.');
+      return alert('AI key is not configured.\n\nPlease go to Settings → AI Settings and add your key.');
     }
     setGeneratingFollowUp(true);
     setGeneratingFollowUpIdx(index);
@@ -756,7 +756,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       setAiResultSubject(res.data.subject || '');
       setAiResultBody(res.data.body || '');
     } catch (err: any) {
-      alert(err.response?.data?.error || 'AI generation failed. Please check your Gemini API key in Settings.');
+      alert(err.response?.data?.error || 'AI generation failed. Please check your API key in Settings.');
     } finally {
       setAiGenerating(false);
     }
@@ -1183,7 +1183,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                             onClick={() => handleGenerateFollowUp(idx)}
                             disabled={generatingFollowUp || !pitch.trim()}
                             className="text-[10px] flex items-center gap-1 font-bold text-indigo-400 bg-indigo-500/10 px-2 py-1 rounded-lg border border-indigo-500/20 hover:bg-indigo-500/20 transition-all disabled:opacity-50 flex-shrink-0"
-                            title={!pitch.trim() ? 'Add pitch text above to generate AI follow-ups' : !settingsStatus.GEMINI_API_KEY ? 'Gemini key not configured — go to Settings' : 'Generate this follow-up with AI'}
+                            title={!pitch.trim() ? 'Add pitch text above to generate AI follow-ups' : !settingsStatus.GEMINI_API_KEY ? 'AI key not configured — go to Settings' : 'Generate this follow-up with AI'}
                           >
                             {generatingFollowUp && generatingFollowUpIdx === idx ? (
                               <Loader2 className="w-3 h-3 animate-spin" />
@@ -2268,21 +2268,21 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   </div>
                 </div>
 
-                {/* Gemini Settings Card */}
+                {/* AI Settings Card */}
                 <div className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm space-y-4">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-lg font-bold text-white">Gemini AI Settings</h3>
+                    <h3 className="text-lg font-bold text-white">AI Settings</h3>
                     <span className={`px-2.5 py-0.5 rounded-full text-xs font-semibold ${settingsStatus.GEMINI_API_KEY ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border border-rose-500/20'}`}>
                       {settingsStatus.GEMINI_API_KEY ? 'Connected' : 'Disconnected'}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500">
-                    Used to intelligently map CSV headers and write high-converting cold email copy.
+                    Used to intelligently map CSV headers and write high-converting cold email copy (Anthropic Claude).
                   </p>
                   <div className="space-y-2">
                     <input
                       type="password"
-                      placeholder="Paste Gemini API Key"
+                      placeholder="Paste AI API Key (Claude)"
                       value={tempGeminiKey}
                       onChange={e => setTempGeminiKey(e.target.value)}
                       className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-sm outline-none focus:border-indigo-500/50"
@@ -2293,7 +2293,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                       className="w-full bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-bold py-2 rounded-lg transition-all flex items-center justify-center gap-2"
                     >
                       {savingGemini ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
-                      Save Gemini Key
+                      Save AI Key
                     </button>
                   </div>
                 </div>
@@ -2316,10 +2316,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                 <p className="text-[11px] text-slate-500 mt-1">
                   {mappingLoading ? (
                     <span className="flex items-center gap-1.5 text-indigo-400">
-                      <Loader2 className="w-3 h-3 animate-spin" /> Gemini is analyzing your columns...
+                      <Loader2 className="w-3 h-3 animate-spin" /> AI is analyzing your columns...
                     </span>
                   ) : (
-                    "Gemini has mapped the column fields. Verify them below."
+                    "AI has mapped the column fields. Verify them below."
                   )}
                 </p>
               </div>
@@ -2423,7 +2423,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                   AI Email Writer
                 </h3>
                 <p className="text-[11px] text-slate-500 mt-1">
-                  Describe your campaign goal and let Gemini generate cold outreach templates with dynamic placeholders.
+                  Describe your campaign goal and let AI generate cold outreach templates with dynamic placeholders.
                 </p>
               </div>
               <button onClick={() => setShowAiModal(false)} className="text-slate-500 hover:text-slate-300">
