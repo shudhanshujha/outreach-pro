@@ -118,7 +118,7 @@ function aiConcurrencyGuard() {
   return () => { _activeAiRequests = Math.max(0, _activeAiRequests - 1); };
 }
 
-const GROQ_MODEL = 'llama3-70b-8192';
+const GROQ_MODEL = 'llama-3.3-70b-versatile';
 const GROQ_API_BASE = 'https://api.groq.com/openai/v1/chat/completions';
 
 // Helper to call Groq with a prompt and get text back
