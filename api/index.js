@@ -148,13 +148,21 @@ async function callGroq(prompt, system, timeout = 30000) {
 }
 
 // Helper to call Groq and parse JSON response
+function sanitizeJSON(text) {
+  let s = text.trim();
+  if (s.startsWith('```')) {
+    s = s.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+  }
+  // Strip control characters that break JSON.parse (0x00-0x1F, keep \t=0x09)
+  s = s.replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, '');
+  try { return JSON.parse(s); } catch (_) {}
+  // If still failing (e.g. literal newlines inside strings), strip all whitespace control chars
+  s = s.replace(/[\r\n]/g, ' ').replace(/\s+/g, ' ');
+  return JSON.parse(s);
+}
 async function callGroqJSON(prompt, system, timeout = 30000) {
   const text = await callGroq(prompt, 'You are a JSON-only assistant. ' + (system || ''), timeout);
-  let cleaned = text.trim();
-  if (cleaned.startsWith('```')) {
-    cleaned = cleaned.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-  }
-  return JSON.parse(cleaned);
+  return sanitizeJSON(text);
 }
 
 
@@ -532,12 +540,7 @@ Body must be clean HTML with <p> and <br />. No <html>, <body>, <head>.`;
         let resultText = response.data?.choices?.[0]?.message?.content;
         if (!resultText) throw new Error('Empty response from AI');
 
-        resultText = resultText.trim();
-        if (resultText.startsWith('```')) {
-          resultText = resultText.replace(/^```(json)?/i, '').replace(/```$/, '').trim();
-        }
-
-        const parsed = JSON.parse(resultText);
+        const parsed = sanitizeJSON(resultText);
         if (Array.isArray(parsed)) {
           results.push(...parsed);
           sendEvent({ type: 'batch_done', batchNum, results: parsed });
