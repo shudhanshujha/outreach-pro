@@ -213,28 +213,20 @@ async function getBrevoAccountEmail(key) {
   return _brevoAccountEmail;
 }
 
-async function sendViaBrevo({ from, to, subject, html, textContent, sentId, campaignId, recipientEmail, accountEmail }) {
+async function sendViaBrevo({ from, to, subject, html, textContent, sentEmailId, messageId }) {
   const key = await getBrevoKey();
-  const messageId = `<${uuidv4()}@outreachpro.mail>`;
+  const msgId = messageId || `<${uuidv4()}@outreachpro.mail>`;
   const plainText = textContent || htmlToPlainText(html);
 
-  // All KloutKrew Gmail accounts are verified as senders in Brevo,
-  // so we send directly from the selected Gmail address.
   const senderName = formatSenderName(from);
 
   const extraHeaders = {
     'Reply-To': `${from}`,
-    'Message-ID': messageId,
+    'Message-ID': msgId,
     'X-Mailer': 'OutreachPro/1.0',
     'Precedence': 'bulk',
-    'X-Entity-Ref-ID': sentId || uuidv4()
+    'X-Entity-Ref-ID': sentEmailId || uuidv4()
   };
-
-  if (recipientEmail) {
-    const unsubUrl = `${BASE_URL}/api/unsubscribe/${encodeURIComponent(recipientEmail)}`;
-    extraHeaders['List-Unsubscribe'] = `<${unsubUrl}>`;
-    extraHeaders['List-Unsubscribe-Post'] = 'List-Unsubscribe=One-Click';
-  }
 
   try {
     await axios.post('https://api.brevo.com/v3/smtp/email', {
@@ -253,10 +245,8 @@ async function sendViaBrevo({ from, to, subject, html, textContent, sentId, camp
     const detail = err.response?.data ? JSON.stringify(err.response.data) : err.message;
     throw new Error('Brevo API: ' + detail);
   }
-  if (sentId && campaignId && recipientEmail && accountEmail) {
-    await supabase.from('sent_emails').insert({
-      id: sentId, campaign_id: campaignId, recipient_email: recipientEmail, account_email: accountEmail, status: 'sent', message_id: messageId.replace(/[<>]/g, '')
-    });
+  if (sentEmailId) {
+    await supabase.from('sent_emails').update({ status: 'sent', message_id: msgId.replace(/[<>]/g, '') }).eq('id', sentEmailId);
   }
 }
 
@@ -669,16 +659,17 @@ async function runBackgroundWorker() {
     const campaignIds = [...new Set((pending || []).map(e => e.campaign_id))];
     const repliedMap = {};
     if (campaignIds.length > 0) {
-      try {
-        const { data: repliedData } = await supabase
-          .from('sent_emails')
-          .select('campaign_id, recipient_email, replied')
-          .in('campaign_id', campaignIds)
-          .eq('replied', true);
-        for (const r of repliedData || []) {
+      const { data: repliedData, error: repliedErr } = await supabase
+        .from('sent_emails')
+        .select('campaign_id, recipient_email, replied')
+        .in('campaign_id', campaignIds)
+        .eq('replied', true);
+      
+      if (!repliedErr && repliedData) {
+        for (const r of repliedData) {
           repliedMap[`${r.campaign_id}:${r.recipient_email}`] = true;
         }
-      } catch (_) {}
+      }
     }
 
     for (const email of pending || []) {
@@ -689,22 +680,29 @@ async function runBackgroundWorker() {
 
       const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
       if (!accountData || !accountData.appPassword) continue;
+      let sentId;
       try {
-        const sentId = uuidv4();
+        sentId = uuidv4();
         const { html: builtHtml, text: builtText } = buildEmailBody(email.body, sentId);
+        await supabase.from('sent_emails').insert({
+          id: sentId, campaign_id: email.campaign_id, recipient_email: email.recipient_email,
+          account_email: email.account_email, status: 'sending', sent_at: new Date().toISOString()
+        }).catch(err => console.error('Failed to create follow-up sent_emails record:', err.message));
         await sendViaBrevo({
           from: email.account_email,
           to: email.recipient_email,
           subject: email.subject,
           html: builtHtml,
           textContent: builtText,
-          sentId,
-          campaignId: email.campaign_id,
-          recipientEmail: email.recipient_email,
-          accountEmail: email.account_email
+          sentEmailId: sentId,
         });
         await supabase.from('scheduled_emails').update({ status: 'sent' }).eq('id', email.id);
-      } catch (err) { console.error('Follow-up send failed:', err.message); }
+      } catch (err) {
+        if (sentId) {
+          supabase.from('sent_emails').update({ status: 'failed', bounced: true, bounce_reason: err.message?.slice(0, 500) || 'Follow-up failed' }).eq('id', sentId).catch(() => {});
+        }
+        console.error('Follow-up send failed:', err.message);
+      }
     }
   } catch (err) { console.error('Worker error:', err); }
   setTimeout(runBackgroundWorker, 60 * 1000);
@@ -788,22 +786,35 @@ app.post('/api/send', async (req, res) => {
 
         activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + (hasFollowUps ? ' [follow-ups on]' : '') + '...', timestamp: new Date() });
 
+        let sentId;
+        let messageId;
         try {
-          const sentId = uuidv4();
+          sentId = uuidv4();
+          messageId = `<${uuidv4()}@outreachpro.mail>`;
           const pd = personalized?.[recipient.email];
           const pSubject = pd?.subject || subject.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const pBodyHtml = pd?.body || body.replace(/{{\s*(\w+)\s*}}/g, (_, k) => recipient[k] || '');
           const { html: builtHtml, text: builtText } = buildEmailBody(pBodyHtml, sentId);
 
+          // Always record the send attempt so campaign history shows recipients
+          await supabase.from('sent_emails').insert({
+            id: sentId, campaign_id: campaignId, recipient_email: recipient.email,
+            account_email: accEmail, status: 'sending', sent_at: new Date().toISOString()
+          }).catch(err => console.error('Failed to create sent_emails record:', err.message));
+
           const logLabel = pd ? ' [AI personalized]' : '';
           await sendViaBrevo({
             from: accEmail, to: recipient.email, subject: pSubject,
             html: builtHtml, textContent: builtText,
-            sentId, campaignId, recipientEmail: recipient.email, accountEmail: accEmail
+            sentEmailId: sentId, messageId
           });
           activeLogs.push({ text: 'Sent to ' + recipient.email + logLabel, type: 'success', timestamp: new Date() });
         } catch (err) {
           console.error('Email send error:', err);
+          // Mark the record as failed so it still shows in history
+          if (sentId) {
+            supabase.from('sent_emails').update({ status: 'failed', bounced: true, bounce_reason: err.message?.slice(0, 500) || 'Send failed' }).eq('id', sentId).catch(() => {});
+          }
           activeLogs.push({ text: 'Failed to send to ' + recipient.email + ': ' + err.message, type: 'error', timestamp: new Date() });
         }
 
@@ -856,17 +867,22 @@ app.get('/api/campaigns', async (req, res) => {
     // Batch-fetch all sent_emails for all campaigns
     let sentRows = [];
     try {
-      const { data } = await supabase
+      const { data: sentData, error: sentError } = await supabase
         .from('sent_emails')
-        .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
+        .select('*')
         .in('campaign_id', ids);
-      sentRows = data || [];
-    } catch (_) {
-      const { data } = await supabase
-        .from('sent_emails')
-        .select('id, campaign_id, recipient_email, account_email, status, opened_at, sent_at')
-        .in('campaign_id', ids);
-      sentRows = data || [];
+      if (!sentError) {
+        sentRows = sentData || [];
+      }
+    } catch (_) { /* fall through */ }
+    if (sentRows.length === 0) {
+      try {
+        const { data: fallbackData } = await supabase
+          .from('sent_emails')
+          .select('*')
+          .in('campaign_id', ids);
+        sentRows = fallbackData || [];
+      } catch (_) { /* ignore */ }
     }
 
     // Batch-fetch follow_ups
@@ -1420,18 +1436,18 @@ app.post('/api/detect-replies', async (req, res) => {
     if (!accounts || accounts.length === 0) return res.status(400).json({ error: 'No accounts configured' });
 
     let sentEmails;
-    try {
-      const result = await supabase
+    const result = await supabase
+      .from('sent_emails')
+      .select('id, recipient_email, account_email, campaign_id, message_id')
+      .is('replied', null);
+
+    if (result.error) {
+      const fallbackResult = await supabase
         .from('sent_emails')
-        .select('id, recipient_email, account_email, campaign_id, message_id')
-        .is('replied', null);
-      sentEmails = result.data;
-    } catch (_) {
-      const result = await supabase
-        .from('sent_emails')
-        .select('id, recipient_email, account_email, campaign_id')
-        .is('replied', null);
-      sentEmails = result.data;
+        .select('id, recipient_email, account_email, campaign_id');
+      sentEmails = fallbackResult.data || [];
+    } else {
+      sentEmails = result.data || [];
     }
 
     if (!sentEmails || sentEmails.length === 0) return res.json({ replies: [], total: 0 });
@@ -1533,12 +1549,16 @@ app.post('/api/leads/:email/tag', async (req, res) => {
 // ============================================================
 app.get('/api/campaigns/:id/replies', async (req, res) => {
   try {
-    const { data } = await supabase
+    const result = await supabase
       .from('sent_emails')
       .select('recipient_email, replied, replied_at, reply_subject, reply_snippet, tag')
       .eq('campaign_id', req.params.id)
       .eq('replied', true);
-    res.json({ replies: data || [] });
+
+    if (result.error) {
+      return res.json({ replies: [] });
+    }
+    res.json({ replies: result.data || [] });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -1550,13 +1570,13 @@ app.get('/api/campaigns/:id/replies', async (req, res) => {
 app.get('/api/delivery-health', async (req, res) => {
   try {
     let sent;
-    try {
-      const result = await supabase.from('sent_emails').select('account_email, bounced, bounce_reason, status');
-      sent = result.data;
-    } catch (_) {
+    const result = await supabase.from('sent_emails').select('account_email, bounced, bounce_reason, status');
+    if (result.error) {
       // Fallback if bounced/bounce_reason columns don't exist yet
-      const result = await supabase.from('sent_emails').select('account_email, status');
-      sent = result.data;
+      const fallbackResult = await supabase.from('sent_emails').select('account_email, status');
+      sent = fallbackResult.data || [];
+    } else {
+      sent = result.data || [];
     }
     const accountMap = {};
     for (const s of sent || []) {
@@ -1748,10 +1768,21 @@ app.get('/api/campaigns/:id/export', async (req, res) => {
     const { data: campaign } = await supabase.from('campaigns').select('*').eq('id', id).maybeSingle();
     if (!campaign) return res.status(404).json({ error: 'Campaign not found' });
 
-    const { data: sent } = await supabase
+    let sent = [];
+    const sentResult = await supabase
       .from('sent_emails')
       .select('recipient_email, account_email, status, opened_at, sent_at, replied, replied_at, tag, bounced, bounce_reason')
       .eq('campaign_id', id);
+
+    if (sentResult.error) {
+      const fallbackResult = await supabase
+        .from('sent_emails')
+        .select('recipient_email, account_email, status, opened_at, sent_at')
+        .eq('campaign_id', id);
+      sent = fallbackResult.data || [];
+    } else {
+      sent = sentResult.data || [];
+    }
 
     const esc = (v) => (v || '').replace(/"/g, '""');
     const headers = 'Email,Sent From,Status,Sent At,Opened At,Replied,Replied At,Tag,Bounced,Bounce Reason';
