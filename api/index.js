@@ -270,26 +270,25 @@ app.get('/', (req, res) => {
 });
 
 // ============================================================
-// KEEPALIVE — prevent Render free tier from spinning down
+// CRON KEEPALIVE — Vercel cron pings this, which pings Render
 // ============================================================
-const KEEPALIVE_URL = process.env.KEEPALIVE_URL || process.env.BACKEND_URL;
-const KEEPALIVE_INTERVAL = 10 * 60 * 1000; // 10 minutes
-
 app.get('/api/health', (req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
 });
 
-if (KEEPALIVE_URL && !KEEPALIVE_URL.includes('localhost') && !KEEPALIVE_URL.includes('127.0.0.1')) {
-  setInterval(async () => {
-    try {
-      const resp = await fetch(`${KEEPALIVE_URL}/api/health`, { signal: AbortSignal.timeout(15000) });
-      console.log(`[Keepalive] Ping OK — ${resp.status}`);
-    } catch (err) {
-      console.warn(`[Keepalive] Ping failed: ${err.message}`);
-    }
-  }, KEEPALIVE_INTERVAL);
-  console.log(`[Keepalive] Enabled — pinging ${KEEPALIVE_URL} every 10min`);
-}
+app.get('/api/cron-keepalive', async (req, res) => {
+  // Vercel Cron sends x-vercel-cron header — only allow internal calls
+  if (!req.headers['x-vercel-cron']) {
+    return res.status(403).json({ error: 'Forbidden' });
+  }
+  const target = process.env.BACKEND_URL || 'https://outreach-pro-0fip.onrender.com';
+  try {
+    const resp = await fetch(`${target}/api/health`, { signal: AbortSignal.timeout(15000) });
+    res.json({ ok: true, backendStatus: resp.status });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // ============================================================
 // SETTINGS
