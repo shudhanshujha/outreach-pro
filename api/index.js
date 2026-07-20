@@ -603,39 +603,23 @@ app.delete('/api/accounts/:email', async (req, res) => {
 });
 
 // ============================================================
-// TRACKING PIXEL
+// TRACKING PIXEL — records open only; follow-ups are manual
 // ============================================================
 app.get('/api/t/:id.png', async (req, res) => {
   try {
-    const { data: emailData, error } = await supabase.from('sent_emails').select('id, campaign_id, recipient_email, opened_at, account_email').eq('id', req.params.id).maybeSingle();
+    const { data: emailData, error } = await supabase
+      .from('sent_emails')
+      .select('id, opened_at')
+      .eq('id', req.params.id)
+      .maybeSingle();
     if (error) throw error;
     if (emailData && !emailData.opened_at) {
-      const { error: updateErr } = await supabase.from('sent_emails').update({ opened_at: new Date().toISOString() }).eq('id', req.params.id);
+      const { error: updateErr } = await supabase
+        .from('sent_emails')
+        .update({ opened_at: new Date().toISOString() })
+        .eq('id', req.params.id);
       if (updateErr) throw updateErr;
-      const fuSet = _campaignFollowUpEmails[emailData.campaign_id];
-      const shouldFollowUp = fuSet && fuSet.has(emailData.recipient_email.toLowerCase());
-      if (!shouldFollowUp) {
-        console.log(`[Tracking] Skipping follow-ups for ${emailData.recipient_email} (not selected)`);
-        const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
-        res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache, no-store' });
-        res.end(pixel);
-        return;
-      }
-      const { data: followUps } = await supabase.from('follow_ups').select('*').eq('campaign_id', emailData.campaign_id);
-      for (const fu of followUps || []) {
-        const scheduledTime = new Date();
-        scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
-        const { error: insertErr } = await supabase.from('scheduled_emails').upsert({
-          id: uuidv4(),
-          campaign_id: emailData.campaign_id,
-          recipient_email: emailData.recipient_email,
-          account_email: emailData.account_email,
-          subject: fu.subject,
-          body: fu.body,
-          scheduled_at: scheduledTime.toISOString()
-        }, { onConflict: 'id', ignoreDuplicates: true });
-        if (insertErr) console.error('Scheduling follow-up failed:', insertErr.message);
-      }
+      console.log(`[Tracking] Open recorded for email ${req.params.id}`);
     }
   } catch (err) { console.error('Tracking error:', err); }
   const pixel = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64');
@@ -667,11 +651,15 @@ app.get('/api/unsubscribe/:email', async (req, res) => {
 async function runBackgroundWorker() {
   try {
     const now = new Date().toISOString();
-    const { data: pending, error: fetchErr } = await supabase.from('scheduled_emails').select('*')
-      .eq('status', 'pending').lte('scheduled_at', now).limit(100);
+    const { data: pending, error: fetchErr } = await supabase
+      .from('scheduled_emails')
+      .select('*')
+      .eq('status', 'pending')
+      .lte('scheduled_at', now)
+      .limit(100);
     if (fetchErr) throw fetchErr;
 
-    // Batch-fetch reply statuses
+    // Batch-fetch reply statuses to skip follow-ups for replied recipients
     const campaignIds = [...new Set((pending || []).map(e => e.campaign_id))];
     const repliedMap = {};
     if (campaignIds.length > 0) {
@@ -680,7 +668,6 @@ async function runBackgroundWorker() {
         .select('campaign_id, recipient_email, replied')
         .in('campaign_id', campaignIds)
         .eq('replied', true);
-      
       if (!repliedErr && repliedData) {
         for (const r of repliedData) {
           repliedMap[`${r.campaign_id}:${r.recipient_email}`] = true;
@@ -689,42 +676,76 @@ async function runBackgroundWorker() {
     }
 
     for (const email of pending || []) {
+      // Auto-cancel if the recipient has already replied
       if (repliedMap[`${email.campaign_id}:${email.recipient_email}`]) {
-        await supabase.from('scheduled_emails').update({ status: 'cancelled' }).eq('id', email.id).catch(() => {});
+        await supabase
+          .from('scheduled_emails')
+          .update({ status: 'cancelled' })
+          .eq('id', email.id)
+          .catch(() => {});
+        console.log(`[Worker] Auto-cancelled follow-up for replied recipient: ${email.recipient_email}`);
         continue;
       }
 
-      const { data: accountData } = await supabase.from('accounts').select('*').eq('email', email.account_email).maybeSingle();
-      if (!accountData || !accountData.appPassword) continue;
+      // Look up the sending account
+      const { data: accountData } = await supabase
+        .from('accounts')
+        .select('*')
+        .eq('email', email.account_email)
+        .maybeSingle();
+
+      // If account is gone, mark as failed so it doesn't retry forever
+      if (!accountData || !accountData.appPassword) {
+        await supabase
+          .from('scheduled_emails')
+          .update({ status: 'failed' })
+          .eq('id', email.id)
+          .catch(() => {});
+        console.warn(`[Worker] Account not found for follow-up (${email.recipient_email}), marked failed.`);
+        continue;
+      }
+
       let sentId;
       try {
         sentId = uuidv4();
         const { html: builtHtml, text: builtText } = buildEmailBody(email.body, sentId);
         const { error: insErr } = await supabase.from('sent_emails').insert({
-          id: sentId, campaign_id: email.campaign_id, recipient_email: email.recipient_email,
-          account_email: email.account_email, status: 'sending', sent_at: new Date().toISOString()
+          id: sentId,
+          campaign_id: email.campaign_id,
+          recipient_email: email.recipient_email,
+          account_email: email.account_email,
+          status: 'sending',
+          sent_at: new Date().toISOString()
         });
-        if (insErr) { console.error('Failed to create follow-up sent_emails record:', insErr.message); sentId = null; }
+        if (insErr) {
+          console.error('[Worker] Failed to create follow-up sent_emails record:', insErr.message);
+          sentId = null;
+        }
         await sendViaBrevo({
           from: email.account_email,
           to: email.recipient_email,
           subject: email.subject,
           html: builtHtml,
           textContent: builtText,
-          sentEmailId: sentId,
+          sentEmailId: sentId
         });
+        // Mark the scheduled row as sent
         await supabase.from('scheduled_emails').update({ status: 'sent' }).eq('id', email.id);
+        console.log(`[Worker] Follow-up sent to ${email.recipient_email}`);
       } catch (err) {
+        // Mark BOTH the sent_emails record and the scheduled row as failed
         if (sentId) {
-          await supabase.from('sent_emails').update({ status: 'failed' }).eq('id', sentId);
+          await supabase.from('sent_emails').update({ status: 'failed' }).eq('id', sentId).catch(() => {});
         }
-        console.error('Follow-up send failed:', err.message);
+        await supabase.from('scheduled_emails').update({ status: 'failed' }).eq('id', email.id).catch(() => {});
+        console.error(`[Worker] Follow-up send failed for ${email.recipient_email}:`, err.message);
       }
     }
-  } catch (err) { console.error('Worker error:', err); }
+  } catch (err) { console.error('[Worker] Fatal error:', err); }
   setTimeout(runBackgroundWorker, 60 * 1000);
 }
 setTimeout(runBackgroundWorker, 60 * 1000);
+
 
 // ============================================================
 // CAMPAIGN SEND
@@ -732,13 +753,12 @@ setTimeout(runBackgroundWorker, 60 * 1000);
 let activeLogs = [];
 let activeStatus = 'idle';
 let activeStop = false;
-const _campaignFollowUpEmails = {}; // campaignId → Set of recipient emails
 
 app.post('/api/send', async (req, res) => {
   try {
     if (activeStatus === 'running') return res.status(400).json({ error: 'A campaign is already running' });
 
-    const { accounts: accountEmails, recipients, subject, body, delayMin = 30, delayMax = 90, followUps = [], campaignId = uuidv4(), followUpEmails = [], personalized } = req.body;
+    const { accounts: accountEmails, recipients, subject, body, delayMin = 30, delayMax = 90, followUps = [], campaignId = uuidv4(), personalized } = req.body;
     const minDelay = Math.max(1, Math.min(delayMin, delayMax));
     const maxDelay = Math.max(minDelay, delayMax);
 
@@ -763,6 +783,7 @@ app.post('/api/send', async (req, res) => {
       }, { onConflict: 'id' });
       if (campaignErr) throw campaignErr;
 
+      // Store follow-up sequence templates (activated manually per-recipient from Campaign History)
       for (const fu of followUps) {
         const { error: fuErr } = await supabase.from('follow_ups').insert({
           campaign_id: campaignId,
@@ -773,9 +794,9 @@ app.post('/api/send', async (req, res) => {
         if (fuErr) throw fuErr;
       }
 
-      _campaignFollowUpEmails[campaignId] = new Set(followUpEmails.map(e => e.toLowerCase()));
-      const followUpCount = followUpEmails.length;
-      activeLogs.push({ text: `Follow-ups enabled for ${followUpCount} of ${recipients.length} recipients`, type: 'info', timestamp: new Date() });
+      if (followUps.length > 0) {
+        activeLogs.push({ text: `Follow-up sequence (${followUps.length} emails) saved — activate per-recipient from Campaign History`, type: 'info', timestamp: new Date() });
+      }
 
       for (let i = 0; i < recipients.length; i++) {
         if (activeStop) {
@@ -799,9 +820,8 @@ app.post('/api/send', async (req, res) => {
         } catch (_) { /* skip unsub check on error */ }
 
         const accEmail = accountEmails[i % accountEmails.length].user;
-        const hasFollowUps = _campaignFollowUpEmails[campaignId]?.has(recipient.email.toLowerCase());
 
-        activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + (hasFollowUps ? ' [follow-ups on]' : '') + '...', timestamp: new Date() });
+        activeLogs.push({ text: '[' + (i + 1) + '/' + recipients.length + '] Sending to ' + recipient.email + ' via ' + accEmail + '...', timestamp: new Date() });
 
         let sentId;
         let messageId;
@@ -957,12 +977,23 @@ app.get('/api/campaigns', async (req, res) => {
       const followUps = fuByCampaign[c.id] || [];
       const scheduled = scheduledByCampaign[c.id] || [];
 
-      const recipientEmails = sent.map(s => s.recipient_email);
+      // Build a per-recipient map: email → array of scheduled statuses
       const scheduledMap = {};
       for (const s of scheduled) {
         if (!scheduledMap[s.recipient_email]) scheduledMap[s.recipient_email] = [];
         scheduledMap[s.recipient_email].push(s.status);
       }
+
+      const deriveFollowUpStatus = (recipientEmail) => {
+        if (!followUps.length) return 'none';  // campaign has no follow-up sequence
+        const statuses = scheduledMap[recipientEmail] || [];
+        if (statuses.length === 0) return 'none';        // never started
+        if (statuses.some(st => st === 'pending')) return 'running';  // at least one queued
+        if (statuses.every(st => st === 'sent')) return 'completed';  // all sent successfully
+        if (statuses.some(st => st === 'cancelled')) return 'stopped'; // explicitly stopped
+        if (statuses.some(st => st === 'failed')) return 'failed';     // send error
+        return 'stopped'; // fallback
+      };
 
       result.push({
         id: c.id,
@@ -989,7 +1020,7 @@ app.get('/api/campaigns', async (req, res) => {
             tag: s.tag || null,
             bounced: s.bounced || false,
             bounce_reason: s.bounce_reason || null,
-            followUpStatus: !followUps.length ? 'none' : (scheduledMap[s.recipient_email] || []).some(st => st === 'pending') ? 'running' : 'stopped'
+            followUpStatus: deriveFollowUpStatus(s.recipient_email)
           };
         }) || [],
         followUps: followUps || []
@@ -1001,6 +1032,7 @@ app.get('/api/campaigns', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ============================================================
 // STOP FOLLOW-UP for a recipient in a campaign
@@ -1044,6 +1076,22 @@ app.post('/api/campaigns/:id/start-followup', async (req, res) => {
       return res.status(400).json({ error: 'No follow-up sequence configured for this campaign' });
     }
 
+    // Guard: check if pending follow-ups already exist for this recipient to prevent duplicates
+    const { data: existingPending } = await supabase
+      .from('scheduled_emails')
+      .select('id')
+      .eq('campaign_id', campaignId)
+      .eq('recipient_email', email)
+      .eq('status', 'pending');
+
+    if (existingPending && existingPending.length > 0) {
+      return res.json({
+        success: true,
+        message: `Follow-ups already running for ${email} (${existingPending.length} pending)`,
+        alreadyRunning: true
+      });
+    }
+
     // Fetch the original account_email used for this recipient
     let accountEmail = '';
     try {
@@ -1052,16 +1100,24 @@ app.post('/api/campaigns/:id/start-followup', async (req, res) => {
         .select('account_email')
         .eq('campaign_id', campaignId)
         .eq('recipient_email', email)
+        .order('sent_at', { ascending: true })
+        .limit(1)
         .maybeSingle();
       if (sentRecord) accountEmail = sentRecord.account_email;
     } catch (_) {}
 
+    if (!accountEmail) {
+      return res.status(400).json({ error: `No sent email record found for ${email} in this campaign` });
+    }
+
+    const scheduled = [];
     for (const fu of followUps) {
       const scheduledTime = new Date();
       scheduledTime.setDate(scheduledTime.getDate() + fu.delay_days);
+      const id = uuidv4();
 
-      const { error: insertErr } = await supabase.from('scheduled_emails').upsert({
-        id: uuidv4(),
+      const { error: insertErr } = await supabase.from('scheduled_emails').insert({
+        id,
         campaign_id: campaignId,
         recipient_email: email,
         account_email: accountEmail,
@@ -1069,15 +1125,23 @@ app.post('/api/campaigns/:id/start-followup', async (req, res) => {
         body: fu.body,
         scheduled_at: scheduledTime.toISOString(),
         status: 'pending'
-      }, { onConflict: 'id', ignoreDuplicates: true });
-      if (insertErr) console.error('Schedule follow-up error:', insertErr.message);
+      });
+      if (insertErr) {
+        console.error('[Start Follow-up] Insert error:', insertErr.message);
+      } else {
+        scheduled.push(id);
+      }
     }
 
-    res.json({ success: true, message: `Follow-ups started for ${email} (${followUps.length} emails scheduled)` });
+    res.json({
+      success: true,
+      message: `Follow-ups started for ${email} (${scheduled.length} of ${followUps.length} emails scheduled)`
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 });
+
 
 // ============================================================
 // INBOX (via IMAP)

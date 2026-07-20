@@ -230,7 +230,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [status, setStatus] = useState<'idle' | 'running' | 'completed'>('idle');
   const [isEnriching, setIsEnriching] = useState(false);
 
-  // Parsed recipient list + follow-up selection
+  // Parsed recipient list
   const parsedRecipients = React.useMemo(() => recipientText.split('\n')
     .map(l => l.trim())
     .filter(l => l && !l.startsWith('email,'))
@@ -239,14 +239,6 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
       return { email: parts[0] || '', name: parts[1] || 'Unknown', business: parts[2] || 'N/A' };
     })
     .filter(r => r.email), [recipientText]);
-
-  const [followUpEmails, setFollowUpEmails] = useState<Set<string>>(new Set());
-
-  const toggleFollowUp = (email: string) => {
-    const next = new Set(followUpEmails);
-    if (next.has(email)) next.delete(email); else next.add(email);
-    setFollowUpEmails(next);
-  };
 
   // Inbox state
   const [inboxMessages, setInboxMessages] = useState<EmailMessage[]>([]);
@@ -328,12 +320,14 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
+  // action loading key is "campaignId:email" to prevent cross-campaign spinner collisions
   const [_actionLoading, _setActionLoading] = useState<string | null>(null);
   const [selectedRecipients, setSelectedRecipients] = useState<Record<string, Set<string>>>({});
   const [previewEmail, setPreviewEmail] = useState<{ subject: string; body: string; to: string } | null>(null);
 
   const handleStopFollowUp = async (campaignId: string, email: string) => {
-    _setActionLoading(email);
+    const key = `${campaignId}:${email}`;
+    _setActionLoading(key);
     try {
       await axios.post(`${API_BASE_URL}/api/campaigns/${campaignId}/stop-followup`, { email });
       fetchCampaignHistory();
@@ -345,7 +339,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   };
 
   const handleStartFollowUp = async (campaignId: string, email: string) => {
-    _setActionLoading(email);
+    const key = `${campaignId}:${email}`;
+    _setActionLoading(key);
     try {
       await axios.post(`${API_BASE_URL}/api/campaigns/${campaignId}/start-followup`, { email });
       fetchCampaignHistory();
@@ -827,7 +822,6 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         delayMin, 
         delayMax,
         followUps,
-        followUpEmails: Array.from(followUpEmails)
       });
       setStatus('running');
       setActiveTab('campaign');
@@ -1172,8 +1166,9 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
                 <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
                   <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                    <Clock className="w-4 h-4" /> Follow-up Sequence (Triggers on Open)
+                    <Clock className="w-4 h-4" /> Follow-up Sequence
                   </h2>
+                  <p className="text-[10px] text-slate-600 italic mb-4">Activate per-recipient from Campaign History after sending</p>
                   <div className="space-y-6">
                     {followUps.map((fu, idx) => (
                       <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
@@ -1208,13 +1203,13 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     <p className="text-indigo-100/70 text-sm mb-6">Click to begin outreach to {parsedRecipients.length} leads</p>
                     <div className="flex items-center gap-2 mb-8">
                       <span className="bg-white/10 px-3 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5">
-                        {followUpEmails.size} with follow-ups
+                        {parsedRecipients.length} recipients
                       </span>
                       <button
                         onClick={() => setActiveTab('followups')}
                         className="bg-white/10 hover:bg-white/20 px-3 py-1.5 rounded-lg text-xs font-bold transition-all"
                       >
-                        Manage
+                        Edit Sequence
                       </button>
                     </div>
                     <div className="grid grid-cols-2 gap-4 mb-8">
@@ -1476,124 +1471,62 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
               <div className="flex items-center justify-between mb-6">
                 <div>
-                  <h1 className="text-3xl font-bold text-white">Follow-up Settings</h1>
-                  <p className="text-slate-500 text-sm mt-1">Manage your follow-up sequence and choose who receives it.</p>
+                  <h1 className="text-3xl font-bold text-white">Follow-up Sequence</h1>
+                  <p className="text-slate-500 text-sm mt-1">Define your follow-up emails. Activate them manually per-recipient from Campaign History.</p>
                 </div>
                 <div className="flex items-center gap-3 text-sm">
-                  <span className="text-slate-400">{parsedRecipients.length} recipients</span>
-                  <span className="w-px h-4 bg-slate-700" />
-                  <span className="text-indigo-400 font-bold">{followUpEmails.size} with follow-ups</span>
+                  <span className="text-slate-400">{followUps.length} emails in sequence</span>
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 xl:grid-cols-12 gap-8">
-                {/* Sequence config */}
-                <div className="xl:col-span-7 space-y-8">
-                  <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
-                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest mb-6 flex items-center gap-2">
-                      <Clock className="w-4 h-4" /> Follow-up Sequence (Triggers on Open)
+              <div className="space-y-8">
+                <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
+                  <div className="flex items-center justify-between mb-6">
+                    <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
+                      <Clock className="w-4 h-4" /> Follow-up Sequence
                     </h2>
-                    <div className="space-y-6">
-                      {followUps.map((fu, idx) => (
-                        <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
-                          <div className="flex items-center gap-3">
-                            <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
-                            <input
-                              placeholder="Subject"
-                              value={fu.subject}
-                              onChange={e => updateFollowUp(idx, 'subject', e.target.value)}
-                              className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50"
-                            />
-                          </div>
-                          <textarea
-                            placeholder="Body"
-                            value={fu.body}
-                            onChange={e => updateFollowUp(idx, 'body', e.target.value)}
-                            className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none placeholder:text-slate-600"
+                    <p className="text-[10px] text-slate-600 italic">Activate per-recipient from Campaign History after sending</p>
+                  </div>
+                  <div className="space-y-6">
+                    {followUps.map((fu, idx) => (
+                      <div key={idx} className="p-4 bg-slate-950 rounded-xl border border-slate-800/50 space-y-3">
+                        <div className="flex items-center gap-3">
+                          <span className="bg-indigo-500/10 text-indigo-400 px-3 py-1 rounded-lg text-xs font-bold border border-indigo-500/20">Day {fu.delayDays}</span>
+                          <input
+                            placeholder="Subject"
+                            value={fu.subject}
+                            onChange={e => updateFollowUp(idx, 'subject', e.target.value)}
+                            className="flex-1 bg-transparent border-b border-slate-800 py-1 text-sm outline-none focus:border-indigo-500/50"
                           />
                         </div>
-                      ))}
-                    </div>
-                  </section>
-                </div>
-
-                {/* Recipient assignment */}
-                <div className="xl:col-span-5 space-y-8">
-                  <div className="sticky top-10 space-y-8">
-                    <section className="bg-[#111113] p-6 rounded-2xl border border-slate-800/40 shadow-sm">
-                      <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-sm font-bold text-slate-500 uppercase tracking-widest flex items-center gap-2">
-                          <Users className="w-4 h-4" /> Assign Follow-ups
-                        </h2>
-                        <div className="flex gap-2 text-[10px]">
-                          <button onClick={() => setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)))} className="text-indigo-400 hover:text-indigo-300 uppercase font-bold tracking-widest">All</button>
-                          <button onClick={() => setFollowUpEmails(new Set())} className="text-slate-500 hover:text-slate-300 uppercase font-bold tracking-widest">None</button>
-                        </div>
+                        <textarea
+                          placeholder="Body"
+                          value={fu.body}
+                          onChange={e => updateFollowUp(idx, 'body', e.target.value)}
+                          className="w-full bg-transparent text-xs font-mono py-2 outline-none h-20 resize-none placeholder:text-slate-600"
+                        />
                       </div>
-
-                      {parsedRecipients.length === 0 ? (
-                        <div className="text-slate-600 text-sm italic p-6 text-center border border-dashed border-slate-800 rounded-xl">
-                          No recipients loaded. Go to <button onClick={() => setActiveTab('campaign')} className="text-indigo-400 underline">Campaign</button> to add contacts.
-                        </div>
-                      ) : (
-                        <div className="border border-slate-800/50 rounded-xl overflow-hidden">
-                          <div className="max-h-[420px] overflow-y-auto">
-                            <table className="w-full text-xs">
-                              <thead className="bg-slate-900/80 sticky top-0">
-                                <tr className="text-slate-500 uppercase tracking-wider">
-                                  <th className="px-3 py-2 text-left w-8">
-                                    <input
-                                      type="checkbox"
-                                      checked={parsedRecipients.length > 0 && followUpEmails.size === parsedRecipients.length}
-                                      onChange={() => {
-                                        if (followUpEmails.size === parsedRecipients.length) setFollowUpEmails(new Set());
-                                        else setFollowUpEmails(new Set(parsedRecipients.map(r => r.email)));
-                                      }}
-                                      className="accent-indigo-500"
-                                    />
-                                  </th>
-                                  <th className="px-3 py-2 text-left font-bold">Email</th>
-                                  <th className="px-3 py-2 text-left font-bold hidden sm:table-cell">Name</th>
-                                  <th className="px-3 py-2 text-left font-bold">Follow-ups</th>
-                                </tr>
-                              </thead>
-                              <tbody className="divide-y divide-slate-800/20">
-                                {parsedRecipients.map((r, i) => (
-                                  <tr key={i} className="hover:bg-white/[0.02] transition-all">
-                                    <td className="px-3 py-2">
-                                      <input
-                                        type="checkbox"
-                                        checked={followUpEmails.has(r.email)}
-                                        onChange={() => toggleFollowUp(r.email)}
-                                        className="accent-indigo-500"
-                                      />
-                                    </td>
-                                    <td className="px-3 py-2 text-slate-300 font-medium truncate max-w-[180px]">{r.email}</td>
-                                    <td className="px-3 py-2 text-slate-500 hidden sm:table-cell truncate max-w-[100px]">{r.name}</td>
-                                    <td className="px-3 py-2">
-                                      {followUpEmails.has(r.email) ? (
-                                        <span className="text-indigo-400 text-[10px] font-bold">On</span>
-                                      ) : (
-                                        <span className="text-slate-600 text-[10px] font-bold">Off</span>
-                                      )}
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                          <div className="px-3 py-2 bg-slate-900/40 border-t border-slate-800/30 flex justify-between text-[10px] text-slate-500">
-                            <span>{parsedRecipients.length} total</span>
-                            <span className="text-indigo-400 font-bold">{followUpEmails.size} with follow-ups</span>
-                          </div>
-                        </div>
-                      )}
-                    </section>
+                    ))}
                   </div>
-                </div>
+                </section>
+
+                {/* Instructions card */}
+                <section className="bg-indigo-500/5 border border-indigo-500/20 p-5 rounded-2xl">
+                  <h3 className="text-xs font-bold text-indigo-400 uppercase tracking-widest mb-3 flex items-center gap-2">
+                    <span>ℹ</span> How to activate follow-ups
+                  </h3>
+                  <ol className="text-xs text-slate-400 space-y-2 list-decimal list-inside">
+                    <li>Send your campaign from the <button onClick={() => setActiveTab('campaign')} className="text-indigo-400 underline">Campaign</button> tab.</li>
+                    <li>Go to <button onClick={() => setActiveTab('history')} className="text-indigo-400 underline">Campaign History</button>.</li>
+                    <li>Expand your campaign and select recipients using the checkboxes.</li>
+                    <li>Click <strong className="text-white">Start All</strong> in the bulk action bar to schedule follow-ups for the selected batch.</li>
+                  </ol>
+                </section>
               </div>
             </div>
           )}
+
+
 
           {activeTab === 'history' && (
             <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
@@ -1738,11 +1671,16 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 <span className="text-[10px] text-slate-400 flex-1">{(selectedRecipients[c.id] || new Set()).size} recipient(s) selected</span>
                                 <button
                                   onClick={async () => {
-                                    const emails = Array.from(selectedRecipients[c.id] || []);
-                                    for (const email of emails) {
-                                      await handleStartFollowUp(c.id, email);
-                                    }
+                                    const emails = Array.from(selectedRecipients[c.id] || []) as string[];
+                                    // Fire all requests in parallel, refresh once at the end
+                                    await Promise.allSettled(
+                                      emails.map(email =>
+                                        axios.post(`${API_BASE_URL}/api/campaigns/${c.id}/start-followup`, { email })
+                                          .catch(() => {})
+                                      )
+                                    );
                                     setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
+                                    fetchCampaignHistory();
                                   }}
                                   className="text-[10px] font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-indigo-500/10 transition-all"
                                 >
@@ -1750,11 +1688,16 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                 </button>
                                 <button
                                   onClick={async () => {
-                                    const emails = Array.from(selectedRecipients[c.id] || []);
-                                    for (const email of emails) {
-                                      await handleStopFollowUp(c.id, email);
-                                    }
+                                    const emails = Array.from(selectedRecipients[c.id] || []) as string[];
+                                    // Fire all requests in parallel, refresh once at the end
+                                    await Promise.allSettled(
+                                      emails.map(email =>
+                                        axios.post(`${API_BASE_URL}/api/campaigns/${c.id}/stop-followup`, { email })
+                                          .catch(() => {})
+                                      )
+                                    );
                                     setSelectedRecipients(prev => ({ ...prev, [c.id]: new Set() }));
+                                    fetchCampaignHistory();
                                   }}
                                   className="text-[10px] font-bold text-rose-400 hover:text-rose-300 flex items-center gap-1 px-2.5 py-1 rounded-lg hover:bg-rose-500/10 transition-all"
                                 >
@@ -1875,10 +1818,20 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
                                               Running
                                             </span>
+                                          ) : r.followUpStatus === 'completed' ? (
+                                            <span className="flex items-center gap-1 text-[10px] font-bold text-sky-400">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-sky-500" />
+                                              Sent
+                                            </span>
                                           ) : r.followUpStatus === 'stopped' ? (
                                             <span className="flex items-center gap-1 text-[10px] font-bold text-rose-400/70">
                                               <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />
                                               Stopped
+                                            </span>
+                                          ) : r.followUpStatus === 'failed' ? (
+                                            <span className="flex items-center gap-1 text-[10px] font-bold text-amber-400">
+                                              <span className="w-1.5 h-1.5 rounded-full bg-amber-500" />
+                                              Failed
                                             </span>
                                           ) : (
                                             <span className="text-[10px] text-slate-600">—</span>
@@ -1889,8 +1842,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                             <button
                                               onClick={() => {
                                                 const subst: Record<string, string> = { name: r.name || 'there', business: r.business || 'your business' };
-                                                const compile = (tmpl: string) => tmpl.replace(/{{\s*(\w+)\s*}}/g, (_, k) => subst[k] || '');
-                                                
+                                                const compile = (tmpl: string) => tmpl.replace(/{\{\s*(\w+)\s*}}/g, (_, k) => subst[k] || '');
                                                 setPreviewEmail({
                                                   to: r.email,
                                                   subject: compile(c.subject || ''),
@@ -1904,17 +1856,17 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                                             </button>
                                             <button
                                               onClick={() => handleStartFollowUp(c.id, r.email)}
-                                              disabled={_actionLoading === r.email}
+                                              disabled={_actionLoading === `${c.id}:${r.email}` || r.followUpStatus === 'running'}
                                               className="p-1.5 rounded-lg text-indigo-500 hover:bg-indigo-500/10 hover:text-indigo-400 transition-all disabled:opacity-30"
-                                              title="Start follow-ups"
+                                              title={r.followUpStatus === 'running' ? 'Follow-ups already running' : 'Start follow-ups'}
                                             >
-                                              {_actionLoading === r.email ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+                                              {_actionLoading === `${c.id}:${r.email}` ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
                                             </button>
                                             <button
                                               onClick={() => handleStopFollowUp(c.id, r.email)}
-                                              disabled={_actionLoading === r.email}
+                                              disabled={_actionLoading === `${c.id}:${r.email}` || r.followUpStatus === 'none' || r.followUpStatus === 'stopped' || r.followUpStatus === 'completed'}
                                               className="p-1.5 rounded-lg text-rose-600 hover:bg-rose-500/10 hover:text-rose-400 transition-all disabled:opacity-30"
-                                              title="Stop follow-ups"
+                                              title={r.followUpStatus === 'none' ? 'No follow-ups to stop' : r.followUpStatus === 'completed' ? 'All follow-ups already sent' : 'Stop follow-ups'}
                                             >
                                               <Square className="w-3.5 h-3.5" />
                                             </button>
