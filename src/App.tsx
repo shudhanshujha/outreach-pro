@@ -319,6 +319,8 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
   // Campaign History state
   const [campaignHistory, setCampaignHistory] = useState<any[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
+  const [historySlowLoad, setHistorySlowLoad] = useState(false);
   const [expandedCampaign, setExpandedCampaign] = useState<string | null>(null);
   // action loading key is "campaignId:email" to prevent cross-campaign spinner collisions
   const [_actionLoading, _setActionLoading] = useState<string | null>(null);
@@ -368,8 +370,17 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
 
   // --- EFFECTS ---
   useEffect(() => {
+    // Warm up/wake up Render backend immediately on startup
+    axios.get(`${API_BASE_URL}/api/ping`).catch(() => {});
+
     fetchConnectedAccounts();
     fetchSettingsStatus();
+
+    // Keep backend alive by pinging every 5 minutes
+    const keepAliveInterval = setInterval(() => {
+      axios.get(`${API_BASE_URL}/api/ping`).catch(() => {});
+    }, 5 * 60 * 1000);
+
     let interval: any;
     if (status === 'running') {
       interval = setInterval(async () => {
@@ -380,7 +391,10 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
         } catch (err) { console.error(err); }
       }, 2000);
     }
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(keepAliveInterval);
+      if (interval) clearInterval(interval);
+    };
   }, [status]);
 
   useEffect(() => {
@@ -412,14 +426,38 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
     }
   };
 
-  const fetchCampaignHistory = async () => {
+  const fetchCampaignHistory = async (isRetry = false) => {
     setLoadingHistory(true);
+    setHistoryError(null);
+    setHistorySlowLoad(false);
+
+    // Show a "waking up" banner if the request takes more than 5 seconds
+    // (Render free tier cold-starts can take 30–90s)
+    const slowTimer = setTimeout(() => setHistorySlowLoad(true), 5000);
+
     try {
-      const res = await axios.get(`${API_BASE_URL}/api/campaigns`);
-      setCampaignHistory(res.data.campaigns);
-    } catch (err) {
-      console.error('Failed to fetch campaign history');
+      const res = await axios.get(`${API_BASE_URL}/api/campaigns`, {
+        timeout: 90000 // 90s — enough for a Render cold start
+      });
+      setCampaignHistory(res.data.campaigns || []);
+      setHistoryError(null);
+    } catch (err: any) {
+      if (!isRetry) {
+        // Auto-retry once — Render may have just needed a moment to wake up
+        console.warn('Campaign history fetch failed, retrying once...', err.message);
+        clearTimeout(slowTimer);
+        setHistorySlowLoad(false);
+        setLoadingHistory(false);
+        return fetchCampaignHistory(true);
+      }
+      const msg = err.code === 'ECONNABORTED'
+        ? 'The server is taking too long to respond. It may be waking up from sleep — please try again in a moment.'
+        : (err.response?.data?.error || err.message || 'Failed to load campaign history');
+      setHistoryError(msg);
+      console.error('Failed to fetch campaign history:', err.message);
     } finally {
+      clearTimeout(slowTimer);
+      setHistorySlowLoad(false);
       setLoadingHistory(false);
     }
   };
@@ -1545,7 +1583,7 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
                     Detect Replies
                   </button>
                   <button
-                    onClick={fetchCampaignHistory}
+                    onClick={() => fetchCampaignHistory()}
                     disabled={loadingHistory}
                     className="bg-indigo-600 text-white px-4 py-2.5 rounded-xl font-bold flex items-center gap-2 hover:bg-indigo-500 transition-all disabled:opacity-40 text-sm"
                   >
@@ -1556,9 +1594,27 @@ const Dashboard: React.FC<{ onLogout: () => void }> = ({ onLogout }) => {
               </div>
 
               {loadingHistory ? (
-                <div className="flex flex-col items-center justify-center py-20 gap-3 text-slate-600">
-                  <Loader2 className="w-6 h-6 animate-spin" />
-                  <span className="text-sm">Loading campaigns...</span>
+                <div className="flex flex-col items-center justify-center py-20 gap-3">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-400" />
+                  <span className="text-sm text-slate-500">
+                    {historySlowLoad ? 'Backend is waking up from sleep — this can take up to 60s...' : 'Loading campaigns...'}
+                  </span>
+                  {historySlowLoad && (
+                    <p className="text-xs text-slate-700 max-w-xs text-center">
+                      The server runs on a free tier and spins down when idle. Please wait while it starts.
+                    </p>
+                  )}
+                </div>
+              ) : historyError ? (
+                <div className="bg-rose-500/5 border border-rose-500/20 rounded-2xl p-10 text-center space-y-3">
+                  <p className="text-rose-400 font-bold text-sm">Failed to load campaign history</p>
+                  <p className="text-slate-500 text-xs max-w-sm mx-auto">{historyError}</p>
+                  <button
+                    onClick={() => fetchCampaignHistory()}
+                    className="mt-2 text-xs font-bold text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5 mx-auto border border-indigo-500/20 px-3 py-1.5 rounded-lg hover:bg-indigo-500/10 transition-all"
+                  >
+                    <RefreshCcw className="w-3.5 h-3.5" /> Retry
+                  </button>
                 </div>
               ) : campaignHistory.length === 0 ? (
                 <div className="bg-[#111113] border border-slate-800/40 rounded-2xl p-12 text-center">

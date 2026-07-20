@@ -887,6 +887,11 @@ app.post('/api/stop', (req, res) => {
 app.get('/api/logs', (req, res) => res.json({ logs: activeLogs, status: activeStatus }));
 
 // ============================================================
+// HEALTH / KEEP-ALIVE
+// ============================================================
+app.get('/api/ping', (req, res) => res.json({ ok: true, ts: Date.now() }));
+
+// ============================================================
 // CAMPAIGN HISTORY
 // ============================================================
 app.get('/api/campaigns', async (req, res) => {
